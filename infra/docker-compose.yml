@@ -1,0 +1,14 @@
+version: '3.9'
+services:
+  postgres:
+    image: postgres:15
+    container_name: nvr_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: nvr_db
+      POSTGRES_USER: nvr_user
+      POSTGRES_PASSWORD: nvr_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data:/var/lib/postgresql/data
