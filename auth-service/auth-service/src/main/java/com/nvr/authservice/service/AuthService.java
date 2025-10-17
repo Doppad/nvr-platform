@@ -1,8 +1,6 @@
 package com.nvr.authservice.service;
 
 import com.nvr.authservice.repo.AppUserRepository;
-import com.nvr.authservice.service.OtpService;
-import com.nvr.authservice.service.JwtService;
 import com.nvr.authservice.domain.AppUser;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -16,6 +14,9 @@ public class AuthService {
     private final AppUserRepository userRepo;
     private final OtpService otpService;
     private final JwtService jwtService;
+
+    // сервис, который достаёт активную подписку пользователя
+    private final SubscriptionService subscriptionService;
 
     @Transactional
     public String requestOtp(String emailOrPhone) {
@@ -31,9 +32,10 @@ public class AuthService {
         if (!ok) throw new IllegalArgumentException("Invalid or expired OTP");
 
         AppUser user = findOrCreate(emailOrPhone);
-        return jwtService.issueToken(user.getId(), Map.of(  // просит JwtService выдать JWT
-                "plan", "FREE", "archiveDays", 14, "maxCameras", 1
-        ));     // Пока план жёстко FREE
+        // берём клеймы (plan, archiveDays, maxCameras) из реальной подписки
+        var claims = subscriptionService.claimsForUser(user.getId());
+        // выдаём JWT с этими клеймами
+        return jwtService.issueToken(user.getId(), claims);
     }
 
     private AppUser findOrCreate(String emailOrPhone) {

@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/auth")
 @RequiredArgsConstructor
-public class AuthController {
+public class AuthController {       // выдача токена
     private final AuthService authService;
 
     @PostMapping("/otp/request") // Запрос кода, отдаёт {message}

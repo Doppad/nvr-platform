@@ -17,7 +17,7 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-        http.csrf(csrf -> csrf.disable());
+        http.csrf(csrf -> csrf.disable());      // CSRF нужен для браузерных форм при cookie-сессиях. В API на JWT чаще всего стейтлесс (без сессий), и CSRF не нужен -> отключаем
         http.authorizeHttpRequests(reg -> reg
                 .requestMatchers("/auth/otp/**", "/actuator/**").permitAll()
                 .requestMatchers("/auth/me").authenticated()

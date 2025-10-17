@@ -1,31 +1,42 @@
 package com.nvr.authservice.web;
 
 import com.nvr.authservice.repo.AppUserRepository;
+import com.nvr.authservice.service.SubscriptionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
+
 @RestController
 @RequiredArgsConstructor
-public class MeController {
+public class MeController {     // Возвращает профиль текущего аутентифицированного пользователя, исходя из токена
 
     private final AppUserRepository userRepo;
+    private final SubscriptionService subscriptionService;
 
     @GetMapping("/auth/me")
     public ResponseEntity<?> me(Authentication auth) {
         if (auth == null || auth.getPrincipal() == null) {
             return ResponseEntity.status(401).build();
         }
-        Long userId = Long.valueOf(auth.getPrincipal().toString());
+        Long userId = Long.valueOf(auth.getPrincipal().toString());     // Из Authentication достаётся principal, кладется userId
         var user = userRepo.findById(userId).orElse(null);
         if (user == null) return ResponseEntity.status(404).build();
 
-        var resp = new MeResponse(
+        // получаем реальные параметры из подписки
+        Map<String, Object> claims = subscriptionService.claimsForUser(userId);
+
+        var resp = new MeResponse(      // Формируется DTO
                 user.getId(),
                 user.getEmail(),
                 user.getPhone(),
-                new Plan("FREE", 14, 1)
+                new Plan(
+                        (String) claims.get("plan"),
+                        (Integer) claims.get("archiveDays"),
+                        (Integer) claims.get("maxCameras")
+                )
         );
         return ResponseEntity.ok(resp);
     }
