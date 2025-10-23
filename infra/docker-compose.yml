@@ -3,12 +3,28 @@ services:
   postgres:
     image: postgres:15
     container_name: nvr_postgres
-    restart: always
+    restart: unless-stopped
     environment:
       POSTGRES_DB: nvr_db
       POSTGRES_USER: nvr_user
       POSTGRES_PASSWORD: nvr_pass
-    ports:
-      - "5432:5432"
     volumes:
       - ./data:/var/lib/postgresql/data
+  auth-service:
+    build: ./auth-service/auth-service   # ← у тебя код во вложенной папке
+    container_name: auth-service
+    ports:
+      - "${SERVER_PORT:-8081}:8081"
+    environment:
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      APP_JWT_SECRET: ${APP_JWT_SECRET}
+      APP_JWT_TTL_MINUTES: ${APP_JWT_TTL_MINUTES:-60}
+      APP_OTP_TTL_MINUTES: ${APP_OTP_TTL_MINUTES:-5}
+      SERVER_PORT: ${SERVER_PORT:-8081}
+      # Telegram (для dev)
+      APP_TG_ENABLED: ${APP_TG_ENABLED}
+      APP_TG_BOT_TOKEN: ${APP_TG_BOT_TOKEN}
+      APP_TG_CHAT_ID: ${APP_TG_CHAT_ID}
+    restart: unless-stopped

@@ -15,6 +15,8 @@ import java.util.Random;
 @RequiredArgsConstructor
 public class OtpService {
     private final OtpAttemptRepository otpRepo;
+    private final NotificationService notificationService;
+    // private final OtpRepository otpRepository;
 
     @Value("${app.otp.ttl-minutes:5}")
     private int otpTtl;
@@ -31,6 +33,9 @@ public class OtpService {
                 .build();
 
         otpRepo.save(attempt);
+
+        notificationService.sendOtp(target, code);      // для ТГ
+
         return code;
     }
 
