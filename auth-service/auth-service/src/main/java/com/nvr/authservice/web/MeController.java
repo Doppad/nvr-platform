@@ -26,17 +26,25 @@ public class MeController {     // Возвращает профиль теку�
         if (user == null) return ResponseEntity.status(404).build();
 
         // получаем реальные параметры из подписки
-        Map<String, Object> claims = subscriptionService.claimsForUser(userId);
+//        Map<String, Object> claims = subscriptionService.claimsForUser(userId);
+        Map<String, Object> claims = (auth.getDetails() instanceof Map)
+                ? (Map<String, Object>) auth.getDetails()
+                : Map.of();
+
+        String planCode = (String) claims.getOrDefault("plan", "FREE");
+        int archiveDays = ((Number) claims.getOrDefault("archiveDays", 14)).intValue();
+        int maxCameras  = ((Number) claims.getOrDefault("maxCameras", 1)).intValue();
 
         var resp = new MeResponse(      // Формируется DTO
                 user.getId(),
                 user.getEmail(),
                 user.getPhone(),
-                new Plan(
-                        (String) claims.get("plan"),
-                        (Integer) claims.get("archiveDays"),
-                        (Integer) claims.get("maxCameras")
-                )
+                new Plan(planCode, archiveDays, maxCameras)
+//                new Plan(
+//                        (String) claims.get("plan"),
+//                        (Integer) claims.get("archiveDays"),
+//                        (Integer) claims.get("maxCameras")
+//                )
         );
         return ResponseEntity.ok(resp);
     }

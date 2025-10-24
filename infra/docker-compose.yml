@@ -11,8 +11,10 @@ services:
     volumes:
       - ./data:/var/lib/postgresql/data
   auth-service:
-    build: ./auth-service/auth-service   # ← у тебя код во вложенной папке
+    build: ../auth-service/auth-service   # ← у тебя код во вложенной папке
     container_name: auth-service
+    env_file:
+      - .env
     ports:
       - "${SERVER_PORT:-8081}:8081"
     environment:

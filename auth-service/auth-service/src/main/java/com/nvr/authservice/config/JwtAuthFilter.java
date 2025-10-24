@@ -10,22 +10,25 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Component; // <-- добавили
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.HashMap;
 
-public class JwtAuthFilter extends OncePerRequestFilter {   // логика проверки JWT
+@Component // чтобы Spring поднял фильтр как бин
+public class JwtAuthFilter extends OncePerRequestFilter {
 
-    @Value("${app.jwt.secret}")     // Аннотация @Value берёт значение из application.yml нашего секрета
+    @Value("${app.jwt.secret}")
     private String secret;
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request,     // request - объект с данными запроса
-                                    HttpServletResponse response,   // response - что вернётся клиенту
-                                    FilterChain filterChain) throws ServletException, IOException {     // filterChain - цепочка фильтров Spring Security
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain) throws ServletException, IOException {
         String header = request.getHeader("Authorization");
         if (StringUtils.hasText(header) && header.startsWith("Bearer ")) {
             String token = header.substring(7);
@@ -36,13 +39,14 @@ public class JwtAuthFilter extends OncePerRequestFilter {   // логика пр
                         .parseClaimsJws(token)
                         .getBody();
 
-                String sub = claims.getSubject();
+                String sub = claims.getSubject(); // userId как строка
                 if (sub != null) {
                     var auth = new UsernamePasswordAuthenticationToken(sub, null, Collections.emptyList());
+                    auth.setDetails(new HashMap<>(claims)); //  КЛАДЁМ ВСЕ КЛЕЙМЫ
                     SecurityContextHolder.getContext().setAuthentication(auth);
                 }
             } catch (Exception ignored) {
-                // Неверный/просроченный токен — оставляю без аутентификации
+                // битый/просроченный токен — оставляем без аутентификации
             }
         }
         filterChain.doFilter(request, response);
