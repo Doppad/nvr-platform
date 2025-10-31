@@ -1,8 +1,12 @@
 package com.nvr.nvrservice.api.dto;
 
+import com.fasterxml.jackson.annotation.JsonSetter;
+import com.fasterxml.jackson.annotation.Nulls;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @Data
@@ -17,8 +21,10 @@ public class CreateDeviceReq {
     @Size(max = 512) private String address;
     @Size(max = 64)  private String vendor;
 
-    // user_admin / user_default / user_archive / user_ai
-    @NotNull @Size(min = 1) private List<UserCred> users;
+    // ДЕЛАЕМ НЕОБЯЗАТЕЛЬНЫМ: без @NotNull/@Size(min=1)
+    @Valid
+    @JsonSetter(nulls = Nulls.AS_EMPTY)                      // null -> []
+    private List<UserCred> users = new ArrayList<>();        // по умолчанию []
 
     @Data
     public static class UserCred {

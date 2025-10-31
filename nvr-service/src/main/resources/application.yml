@@ -11,14 +11,23 @@ spring:
     password: Mx@:.s7T@#YUrg
   jpa:
     hibernate:
-      ddl-auto: validate
+      ddl-auto: update
+
     properties:
       hibernate.jdbc.time_zone: UTC
   flyway:
-    enabled: true
-    locations: classpath:db/migration
+    enabled: false
 
-# ключ для CryptoService (сгенерируй: `openssl rand -base64 32`)
+# ключ для CryptoService
 nvr:
   crypto:
     masterKeyBase64: "yn7vKJJS0NMYuQgUy3PpJPN9ZwevVH0cRZ0eV2H465U="
+
+# JWT настройки (секрет должен совпадать с тем, кто подписывает токены в auth-service)
+app:
+  jwt:
+    secret: "change-me-please-change-me-please-32b+"
+  logging:
+    level:
+      org.springframework.security: DEBUG
+      com.nvr.nvrservice.security: DEBUG
