@@ -14,8 +14,6 @@ public class AuthService {
     private final AppUserRepository userRepo;
     private final OtpService otpService;
     private final JwtService jwtService;
-
-    // сервис, который достаёт активную подписку пользователя
     private final SubscriptionService subscriptionService;
 
     @Transactional
@@ -28,12 +26,16 @@ public class AuthService {
 
     @Transactional
     public String verifyOtp(String emailOrPhone, String code) {
+        // Проверка OTP
         boolean ok = otpService.verify(emailOrPhone, code);
         if (!ok) throw new IllegalArgumentException("Invalid or expired OTP");
 
+        // Нахожу или создаю пользователя
         AppUser user = findOrCreate(emailOrPhone);
-        // берём клеймы (plan, archiveDays, maxCameras) из реальной подписки
-        var claims = subscriptionService.claimsForUser(user.getId());
+
+        // берём клеймы из реальной подписки
+        Map<String, Object> claims = subscriptionService.claimsForUser(user);
+
         // выдаём JWT с этими клеймами
         return jwtService.issueToken(user.getId(), claims);
     }
