@@ -1,4 +1,5 @@
 version: '3.9'
+
 services:
   postgres:
     image: postgres:15
@@ -10,8 +11,11 @@ services:
       POSTGRES_PASSWORD: nvr_pass
     volumes:
       - ./data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
   auth-service:
-    build: ../auth-service/auth-service   # ← у тебя код во вложенной папке
+    build: ../auth-service/auth-service   # ← путь к твоему AuthService
     container_name: auth-service
     env_file:
       - .env
@@ -21,12 +25,36 @@ services:
       SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
       SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+
       APP_JWT_SECRET: ${APP_JWT_SECRET}
       APP_JWT_TTL_MINUTES: ${APP_JWT_TTL_MINUTES:-60}
       APP_OTP_TTL_MINUTES: ${APP_OTP_TTL_MINUTES:-5}
       SERVER_PORT: ${SERVER_PORT:-8081}
+
       # Telegram (для dev)
       APP_TELEGRAM_ENABLED: ${APP_TELEGRAM_ENABLED}
       APP_TELEGRAM_BOT_TOKEN: ${APP_TELEGRAM_BOT_TOKEN}
       APP_TELEGRAM_CHAT_ID: ${APP_TELEGRAM_CHAT_ID}
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  nvr-service:
+    build:
+      context: ../nvr-service
+      dockerfile: Dockerfile
+    container_name: nvr-service
+    env_file:
+      - .env
+    ports:
+      - "${NVR_SERVER_PORT:-8082}:8082"
+    environment:
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+
+      APP_JWT_SECRET: ${APP_JWT_SECRET}
+      SERVER_PORT: ${NVR_SERVER_PORT:-8082}
+    depends_on:
+      - postgres
     restart: unless-stopped

@@ -3,6 +3,7 @@ package com.nvr.authservice.repo;
 import com.nvr.authservice.domain.UserSubscription;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.time.OffsetDateTime;
 import java.util.Optional;
@@ -12,12 +13,13 @@ public interface UserSubscriptionRepository extends JpaRepository<UserSubscripti
     @Query("""
         select us from UserSubscription us
         join fetch us.plan p
-        where us.userId = :userId
-          and us.isActive = true
+        where us.user.id = :userId
+          and us.active = true
           and us.startsAt <= :now
           and us.endsAt > :now
         order by us.endsAt desc
         """)
-    Optional<UserSubscription> findActive(@org.springframework.data.repository.query.Param("userId") long userId,
-                                          @org.springframework.data.repository.query.Param("now") OffsetDateTime now);
+    Optional<UserSubscription> findActive(@Param("userId") long userId,
+                                        @Param("now") OffsetDateTime now
+        );
 }
