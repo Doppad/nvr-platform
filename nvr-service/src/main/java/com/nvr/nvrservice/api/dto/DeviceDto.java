@@ -14,4 +14,8 @@ public class DeviceDto {
     private String address;
     private String vendor;
     private OffsetDateTime createdAt;
+
+    private Integer camerasCount;
+    private String username;
+    private String password;
 }

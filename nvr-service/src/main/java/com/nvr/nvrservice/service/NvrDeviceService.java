@@ -6,6 +6,7 @@ import com.nvr.nvrservice.api.dto.DeviceDto;
 import com.nvr.nvrservice.api.dto.UpdateDeviceReq;
 import com.nvr.nvrservice.domain.NvrDevice;
 import com.nvr.nvrservice.domain.NvrDeviceUser;
+import com.nvr.nvrservice.repo.NvrCameraRepo;
 import com.nvr.nvrservice.repo.NvrDeviceRepo;
 import com.nvr.nvrservice.repo.NvrDeviceUserRepo;
 import com.nvr.nvrservice.security.CryptoService;
@@ -29,7 +30,39 @@ public class NvrDeviceService {
 
     private final NvrDeviceRepo repo;
     private final NvrDeviceUserRepo deviceUsers;
+    private final NvrCameraRepo cameraRepo;   // <- добавили
     private final CryptoService crypto;
+
+    private DeviceDto toDto(NvrDevice dev) {
+        // достаём обычного пользователя для просмотра
+        NvrDeviceUser viewer = deviceUsers.findByDeviceIdAndRole(dev.getId(), "user_default")
+                .orElseThrow(() -> new IllegalStateException(
+                        "Viewer user (role=user_default) not configured for device " + dev.getId()
+                ));
+
+        // расшифровываем пароль
+        String decryptedPass = crypto.decrypt(viewer.getPasswordEnc());
+
+        // считаем количество камер на этом NVR
+        int camerasCount = cameraRepo.findByDeviceId(dev.getId()).size();
+        // если потом станет тяжело по производительности — сделаем отдельный count-запрос
+
+        // собираем DTO
+        return new DeviceDto(
+                dev.getId(),
+                dev.getName(),
+                dev.getIp(),
+                dev.getPort(),
+                dev.getAddress(),
+                dev.getVendor(),
+                dev.getCreatedAt(),
+
+                camerasCount,
+                viewer.getUsername(),
+                decryptedPass
+        );
+    }
+
 
     private UserContext userCtxOrThrow() {
         var auth = SecurityContextHolder.getContext().getAuthentication();
@@ -84,10 +117,7 @@ public class NvrDeviceService {
             }
         }
 
-        return new DeviceDto(
-                dev.getId(), dev.getName(), dev.getIp(), dev.getPort(),
-                dev.getAddress(), dev.getVendor(), dev.getCreatedAt()
-        );
+        return toDto(dev);
     }
 
     @Transactional(readOnly = true)
@@ -98,9 +128,10 @@ public class NvrDeviceService {
     }
 
     @Transactional(readOnly = true)
-    public Page<NvrDevice> list(Long ownerIdIgnored, Pageable pageable) {
+    public Page<DeviceDto> list(Long ownerIdIgnored, Pageable pageable) {
         var ctx = userCtxOrThrow();
-        return repo.findByOwnerId(ctx.userId(), pageable);
+        Page<NvrDevice> page = repo.findByOwnerId(ctx.userId(), pageable);
+        return page.map(this::toDto);
     }
 
     @Transactional

@@ -48,7 +48,7 @@ public class NvrDeviceController {
 
     // LIST
     @GetMapping
-    public Page<NvrDeviceDto> list(
+    public Page<DeviceDto> list(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(defaultValue = "createdAt,desc") String sort
@@ -67,13 +67,12 @@ public class NvrDeviceController {
         }
 
         Pageable pageable = PageRequest.of(page, size, sortSpec);
-        Page<NvrDevice> pg = service.list(ownerId, pageable);
 
-        List<NvrDeviceDto> dtos = pg.getContent().stream()
-                .map(NvrDeviceMapper::toDto)
-                .toList();
+        // ВАЖНО: теперь Page<DeviceDto>, а не Page<NvrDevice>
+        Page<DeviceDto> pg = service.list(ownerId, pageable);
 
-        return new PageImpl<>(dtos, pageable, pg.getTotalElements());
+        // Можно просто вернуть, без ручного маппинга
+        return pg;
     }
 
     // GET ONE
