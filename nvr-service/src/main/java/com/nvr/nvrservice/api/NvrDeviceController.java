@@ -83,6 +83,14 @@ public class NvrDeviceController {
         return NvrDeviceMapper.toDto(entity);
     }
 
+    @GetMapping("/by-address/{addressId}")
+    public Page<DeviceDto> byAddress(
+            @PathVariable Long addressId,
+            Pageable pageable
+    ) {
+        return service.listByAddress(addressId, pageable);
+    }
+
     // UPDATE
     @PutMapping("/{id}")
     public NvrDevice update(@PathVariable Long id, @RequestBody UpdateDeviceReq req) {

@@ -69,7 +69,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 String plan = claims.get("plan", String.class);
                 Integer maxCameras = claims.get("maxCameras", Integer.class);
                 Integer archiveDays = claims.get("archiveDays", Integer.class);
-                if (maxCameras == null) maxCameras = 1;
+                // if (maxCameras == null) maxCameras = null; // или просто не трогать
                 if (archiveDays == null) archiveDays = 14;
 
                 if (userId != null) {

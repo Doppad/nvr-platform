@@ -7,15 +7,21 @@ import java.time.OffsetDateTime;
 
 @Data @AllArgsConstructor
 public class DeviceDto {
-    private Long id;
-    private String name;
-    private String ip;
-    private int port;
-    private String address;
-    private String vendor;
-    private OffsetDateTime createdAt;
+    Long id;
+    String name;
+    String ip;
+    Integer port;
+    String vendor;
+    OffsetDateTime createdAt;
 
-    private Integer camerasCount;
-    private String username;
-    private String password;
+    // Камеры
+    int camerasCount;
+
+    // Viewer-учётка
+    String viewerLogin;
+    String viewerPassword;
+
+    // Новый блок: адрес
+    Long addressId;
+    String addressLabel;
 }

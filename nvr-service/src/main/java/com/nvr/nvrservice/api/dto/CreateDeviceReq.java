@@ -21,6 +21,10 @@ public class CreateDeviceReq {
     @Size(max = 512) private String address;
     @Size(max = 64)  private String vendor;
 
+    // id адреса, к которому нужно привязать устройство
+    @NotNull
+    private Long addressId;
+
     // ДЕЛАЕМ НЕОБЯЗАТЕЛЬНЫМ: без @NotNull/@Size(min=1)
     @Valid
     @JsonSetter(nulls = Nulls.AS_EMPTY)                      // null -> []

@@ -1,4 +1,3 @@
-// com.nvr.nvrservice.service.NvrDeviceService
 package com.nvr.nvrservice.service;
 
 import com.nvr.nvrservice.api.dto.CreateDeviceReq;
@@ -6,6 +5,7 @@ import com.nvr.nvrservice.api.dto.DeviceDto;
 import com.nvr.nvrservice.api.dto.UpdateDeviceReq;
 import com.nvr.nvrservice.domain.NvrDevice;
 import com.nvr.nvrservice.domain.NvrDeviceUser;
+import com.nvr.nvrservice.repo.AddressRepo;
 import com.nvr.nvrservice.repo.NvrCameraRepo;
 import com.nvr.nvrservice.repo.NvrDeviceRepo;
 import com.nvr.nvrservice.repo.NvrDeviceUserRepo;
@@ -30,38 +30,48 @@ public class NvrDeviceService {
 
     private final NvrDeviceRepo repo;
     private final NvrDeviceUserRepo deviceUsers;
-    private final NvrCameraRepo cameraRepo;   // <- добавили
+    private final NvrCameraRepo cameraRepo;
+    private final AddressRepo addressRepo;
     private final CryptoService crypto;
 
     private DeviceDto toDto(NvrDevice dev) {
-        // достаём обычного пользователя для просмотра
+
+        // Достаём viewer
         NvrDeviceUser viewer = deviceUsers.findByDeviceIdAndRole(dev.getId(), "user_default")
                 .orElseThrow(() -> new IllegalStateException(
                         "Viewer user (role=user_default) not configured for device " + dev.getId()
                 ));
 
-        // расшифровываем пароль
         String decryptedPass = crypto.decrypt(viewer.getPasswordEnc());
 
-        // считаем количество камер на этом NVR
         int camerasCount = cameraRepo.findByDeviceId(dev.getId()).size();
-        // если потом станет тяжело по производительности — сделаем отдельный count-запрос
 
-        // собираем DTO
+        // Новый блок: адрес
+        Long addressId = null;
+        String addressLabel = null;
+
+        if (dev.getAddressEntity() != null) {
+            addressId = dev.getAddressEntity().getId();
+            addressLabel = dev.getAddressEntity().getLabel();
+        }
+
         return new DeviceDto(
                 dev.getId(),
                 dev.getName(),
                 dev.getIp(),
                 dev.getPort(),
-                dev.getAddress(),
                 dev.getVendor(),
                 dev.getCreatedAt(),
 
                 camerasCount,
                 viewer.getUsername(),
-                decryptedPass
+                decryptedPass,
+
+                addressId,
+                addressLabel
         );
     }
+
 
 
     private UserContext userCtxOrThrow() {
@@ -78,7 +88,7 @@ public class NvrDeviceService {
 
         if (ctx == null) {
             // если почему-то нет — соберём минимальный контекст
-            ctx = new UserContext(userId, null, 1, 14);
+            ctx = new UserContext(userId, null, null, 14);
         }
 
         if (ctx.userId() == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "No user in context");
@@ -87,21 +97,44 @@ public class NvrDeviceService {
 
     @Transactional
     public DeviceDto create(Long ownerIdIgnored, CreateDeviceReq req) {
+        // Берём контекст пользователя (userId, лимит и т.д.)
         var ctx = userCtxOrThrow();
         long used = repo.countByOwnerId(ctx.userId());
-        int max = ctx.maxCameras() != null ? ctx.maxCameras() : 1;
+        Integer max = ctx.maxCameras(); // может быть null
+        // int max = ctx.maxCameras() != null ? ctx.maxCameras() : 1;
 
-        if (used >= max) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Max cameras reached: " + max);
+//        if (used >= max) {
+//            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Достигнуто максимальное кол-во камер: " + max);
+//        }
+
+        if (max != null && used >= max) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Max cameras reached: " + max
+            );
         }
 
+        // Разрешаем addressId -> Address (если прислали)
+        //    Здесь мы выполняем бизнес-правило:
+        //    "нельзя привязать NVR к чужому адресу"
+        var address = req.getAddressId() != null
+                ? addressRepo.findById(req.getAddressId())
+                .filter(a -> a.getOwnerId().equals(ctx.userId()))
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Адрес не найден или не принадлежит пользователю"
+                ))
+                : null;
+
+        // Создаём NvrDevice с привязкой к адресу (если есть)
         var dev = repo.save(NvrDevice.builder()
                 .ownerId(ctx.userId())
                 .name(req.getName())
                 .ip(req.getIp())
                 .port(req.getPort())
-                .address(req.getAddress())
+                .address(req.getAddress())      // legacy-строка, можно будет выпилить позже
                 .vendor(req.getVendor())
+                .addressEntity(address)         //поле связи с Address
                 .build());
 
         // Сохраняем учётки, если прислали
@@ -117,6 +150,7 @@ public class NvrDeviceService {
             }
         }
 
+        // Собираем DeviceDto, как раньше
         return toDto(dev);
     }
 
@@ -156,4 +190,21 @@ public class NvrDeviceService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
         repo.delete(device);
     }
+
+    @Transactional(readOnly = true)
+    public Page<DeviceDto> listByAddress(Long addressId, Pageable pageable) {
+        var ctx = userCtxOrThrow();
+
+        // 1) Проверяем, что адрес принадлежит этому пользователю
+        addressRepo.findById(addressId)
+                .filter(a -> a.getOwnerId().equals(ctx.userId()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Address not found"));
+
+        // 2) Берём все NVR по адресу
+        Page<NvrDevice> page = repo.findByOwnerIdAndAddressEntity_Id(ctx.userId(), addressId, pageable);
+
+        // 3) Конвертируем в DTO
+        return page.map(this::toDto);
+    }
+
 }
