@@ -93,7 +93,7 @@ public class NvrDeviceController {
 
     // UPDATE
     @PutMapping("/{id}")
-    public NvrDevice update(@PathVariable Long id, @RequestBody UpdateDeviceReq req) {
+    public DeviceDto update(@PathVariable Long id, @RequestBody UpdateDeviceReq req) {
         Long ownerId = currentUserIdOrThrow();
         return service.update(ownerId, id, req);
     }

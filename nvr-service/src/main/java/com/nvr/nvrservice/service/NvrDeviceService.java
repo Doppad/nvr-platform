@@ -173,7 +173,7 @@ public class NvrDeviceService {
     }
 
     @Transactional
-    public NvrDevice update(Long ownerIdIgnored, Long id, UpdateDeviceReq req) {
+    public DeviceDto update(Long ownerIdIgnored, Long id, UpdateDeviceReq req) {
         var ctx = userCtxOrThrow();
         NvrDevice device = repo.findByIdAndOwnerId(id, ctx.userId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
@@ -184,9 +184,23 @@ public class NvrDeviceService {
         if (req.getAddress() != null) device.setAddress(req.getAddress());
         if (req.getVendor() != null) device.setVendor(req.getVendor());
         if (req.getCamerasCount() != null) device.setCamerasCount(req.getCamerasCount());
-        if (req.getTimezone() != null && !req.getTimezone().isBlank()) device.setTimezone(req.getTimezone());
+        if (req.getTimezone() != null) {
+            String tz = req.getTimezone().isBlank() ? "UTC" : req.getTimezone();
+            device.setTimezone(tz);
+        }
 
-        return repo.save(device);
+        if (req.getAddressId() != null) {
+            var newAddress = addressRepo.findById(req.getAddressId())
+                    .filter(a -> a.getOwnerId().equals(ctx.userId()))
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.NOT_FOUND,
+                            "Address not found or does not belong to user"
+                    ));
+            device.setAddressEntity(newAddress);
+        }
+
+        repo.save(device);
+        return toDto(device);
     }
 
     @Transactional

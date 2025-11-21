@@ -5,3 +5,4 @@ UPDATE nvr_device
 SET timezone = 'UTC'
 WHERE timezone IS NULL;
 
+

@@ -27,7 +27,7 @@ class AuthServiceTest {
         jwtService = mock(JwtService.class);
         subscriptionService = mock(SubscriptionService.class);
 
-        // ⚠️ тут подставь тот конструктор AuthService, который у тебя реально есть
+        // тут подставь тот конструктор AuthService, который у тебя реально есть
         authService = new AuthService(
                 userRepo,
                 otpService,

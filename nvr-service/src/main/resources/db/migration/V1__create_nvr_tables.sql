@@ -12,3 +12,4 @@ CREATE TABLE IF NOT EXISTS nvr_device (
 
 -- позже сюда же добавишь nvr_device_user, nvr_address и т.п.
 
+
