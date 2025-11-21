@@ -1,0 +1,27 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://89.23.102.97:5432/oko_api?sslmode=prefer
+    username: oko_user
+    password: Mx@:.s7T@#YUrg
+  jpa:
+    hibernate:
+      ddl-auto: validate   # схему создаёт Flyway
+    show-sql: true
+  flyway:
+    enabled: true
+    validate-on-migrate: false
+
+server:
+  port: 8081
+
+app:
+  jwt:
+    secret: "change-me-please-change-me-please-32b+"  # потом надо бы заменить секрет для подписи токена
+    ttl-minutes: 60 # время жизни JWT
+    refresh-ttl-days: 60
+  otp:
+    ttl-minutes: 5 # время жизни OTP
+  telegram:
+    enabled: ${APP_TELEGRAM_ENABLED:false}
+    bot-token: ${APP_TELEGRAM_BOT_TOKEN:}
+    chat-id: ${APP_TELEGRAM_CHAT_ID:}
