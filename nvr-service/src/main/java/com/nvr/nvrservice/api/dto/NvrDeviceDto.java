@@ -11,5 +11,6 @@ public class NvrDeviceDto {
     private Integer port;
     private String address;
     private String vendor;
+    private String timezone;
     private OffsetDateTime createdAt;
 }

@@ -1,0 +1,3 @@
+ALTER TABLE nvr_device
+    ADD COLUMN IF NOT EXISTS cameras_count INTEGER NOT NULL DEFAULT 0;
+

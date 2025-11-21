@@ -16,7 +16,7 @@ spring:
     properties:
       hibernate.jdbc.time_zone: UTC
   flyway:
-    enabled: false
+    enabled: true
 
 # ключ для CryptoService
 nvr:

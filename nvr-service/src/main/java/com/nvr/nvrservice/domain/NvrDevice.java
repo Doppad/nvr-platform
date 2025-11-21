@@ -40,10 +40,18 @@ public class NvrDevice {
 
     private String vendor;
 
+    @Column(length = 64, nullable = false)
+    @Builder.Default
+    private String timezone = "UTC";
+
     // НОВОЕ: ссылка на Address через address_id
     @ManyToOne
     @JoinColumn(name = "address_id")
     private Address addressEntity;
+
+    @Column(name = "cameras_count", nullable = false)
+    @Builder.Default
+    private Integer camerasCount = 0;
 
     @Builder.Default
     @Column(nullable = false)

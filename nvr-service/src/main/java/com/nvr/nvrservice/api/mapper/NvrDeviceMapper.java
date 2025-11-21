@@ -13,6 +13,7 @@ public class NvrDeviceMapper {
                 .port(e.getPort())
                 .address(e.getAddress())
                 .vendor(e.getVendor())
+                .timezone(e.getTimezone())
                 .createdAt(e.getCreatedAt())
                 .build();
     }

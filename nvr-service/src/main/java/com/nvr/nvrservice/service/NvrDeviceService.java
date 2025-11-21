@@ -6,7 +6,6 @@ import com.nvr.nvrservice.api.dto.UpdateDeviceReq;
 import com.nvr.nvrservice.domain.NvrDevice;
 import com.nvr.nvrservice.domain.NvrDeviceUser;
 import com.nvr.nvrservice.repo.AddressRepo;
-import com.nvr.nvrservice.repo.NvrCameraRepo;
 import com.nvr.nvrservice.repo.NvrDeviceRepo;
 import com.nvr.nvrservice.repo.NvrDeviceUserRepo;
 import com.nvr.nvrservice.security.CryptoService;
@@ -30,7 +29,6 @@ public class NvrDeviceService {
 
     private final NvrDeviceRepo repo;
     private final NvrDeviceUserRepo deviceUsers;
-    private final NvrCameraRepo cameraRepo;
     private final AddressRepo addressRepo;
     private final CryptoService crypto;
 
@@ -44,7 +42,7 @@ public class NvrDeviceService {
 
         String decryptedPass = crypto.decrypt(viewer.getPasswordEnc());
 
-        int camerasCount = cameraRepo.findByDeviceId(dev.getId()).size();
+        int camerasCount = dev.getCamerasCount() != null ? dev.getCamerasCount() : 0;
 
         // Новый блок: адрес
         Long addressId = null;
@@ -61,6 +59,7 @@ public class NvrDeviceService {
                 dev.getIp(),
                 dev.getPort(),
                 dev.getVendor(),
+                dev.getTimezone(),
                 dev.getCreatedAt(),
 
                 camerasCount,
@@ -126,6 +125,9 @@ public class NvrDeviceService {
                 ))
                 : null;
 
+        int camerasCount = req.getCamerasCount() != null ? req.getCamerasCount() : 0;
+        String timezone = (req.getTimezone() == null || req.getTimezone().isBlank()) ? "UTC" : req.getTimezone();
+
         // Создаём NvrDevice с привязкой к адресу (если есть)
         var dev = repo.save(NvrDevice.builder()
                 .ownerId(ctx.userId())
@@ -134,7 +136,9 @@ public class NvrDeviceService {
                 .port(req.getPort())
                 .address(req.getAddress())      // legacy-строка, можно будет выпилить позже
                 .vendor(req.getVendor())
+                .timezone(timezone)
                 .addressEntity(address)         //поле связи с Address
+                .camerasCount(camerasCount)
                 .build());
 
         // Сохраняем учётки, если прислали
@@ -179,6 +183,8 @@ public class NvrDeviceService {
         if (req.getPort() != null) device.setPort(req.getPort());
         if (req.getAddress() != null) device.setAddress(req.getAddress());
         if (req.getVendor() != null) device.setVendor(req.getVendor());
+        if (req.getCamerasCount() != null) device.setCamerasCount(req.getCamerasCount());
+        if (req.getTimezone() != null && !req.getTimezone().isBlank()) device.setTimezone(req.getTimezone());
 
         return repo.save(device);
     }

@@ -12,6 +12,7 @@ public class DeviceDto {
     String ip;
     Integer port;
     String vendor;
+    String timezone;
     OffsetDateTime createdAt;
 
     // Камеры

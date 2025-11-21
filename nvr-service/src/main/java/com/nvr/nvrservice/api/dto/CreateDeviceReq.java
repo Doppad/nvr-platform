@@ -21,6 +21,12 @@ public class CreateDeviceReq {
     @Size(max = 512) private String address;
     @Size(max = 64)  private String vendor;
 
+    @Size(max = 64)
+    private String timezone;
+
+    @Min(0)
+    private Integer camerasCount;
+
     // id адреса, к которому нужно привязать устройство
     @NotNull
     private Long addressId;
