@@ -6,3 +6,4 @@ SET timezone = 'UTC'
 WHERE timezone IS NULL;
 
 
+
