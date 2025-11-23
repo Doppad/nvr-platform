@@ -16,7 +16,7 @@ server:
 app:
   jwt:
     secret: "change-me-please-change-me-please-32b+"  # потом надо бы заменить секрет для подписи токена
-    ttl-minutes: 60 # время жизни JWT
+    ttl-minutes: 2 # время жизни JWT
     refresh-ttl-days: 60
   otp:
     ttl-minutes: 5 # время жизни OTP
