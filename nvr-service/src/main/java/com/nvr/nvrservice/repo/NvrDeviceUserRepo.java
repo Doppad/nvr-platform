@@ -9,4 +9,5 @@ import java.util.Optional;
 public interface NvrDeviceUserRepo extends JpaRepository<NvrDeviceUser, Long> {
     Optional<NvrDeviceUser> findByDeviceIdAndRole(Long deviceId, String role);
     List<NvrDeviceUser> findByDeviceId(Long deviceId);
+    void deleteByDeviceId(Long deviceId);
 }

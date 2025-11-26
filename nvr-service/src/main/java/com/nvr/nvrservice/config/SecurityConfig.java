@@ -36,7 +36,8 @@ public class SecurityConfig {
                         .requestMatchers(
                                 "/actuator/**",        // системные эндпоинты
                                 "/swagger-ui/**",      // Swagger UI
-                                "/v3/api-docs/**"      // OpenAPI
+                                "/v3/api-docs/**",      // OpenAPI
+                                "/admin/**"
                         ).permitAll()
                         .anyRequest().authenticated()
                 )

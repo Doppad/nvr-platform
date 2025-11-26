@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>NVR Admin</title>
+    <style>
+        body { font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; padding: 20px; background: #f5f5f5; }
+        h1, h2 { margin-bottom: 10px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 32px; }
+        .card { background: #fff; border-radius: 12px; padding: 16px 20px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
+        label { display: block; margin: 6px 0 2px; font-size: 13px; color: #555; }
+        input, select { width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid #ddd; font-size: 14px; }
+        button { margin-top: 10px; padding: 8px 14px; border-radius: 8px; border: none; background: #2563eb; color: #fff; cursor: pointer; font-size: 14px; }
+        button.danger { background: #dc2626; margin-top: 0; }
+        button.danger:hover { background: #b91c1c; }
+        button:hover { background: #1d4ed8; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align: left; }
+        th { background: #fafafa; font-weight: 600; }
+        code { background: #000; color: #0f0; padding: 2px 4px; border-radius: 4px; font-size: 12px; }
+        .hint { font-size: 12px; color: #777; margin-top: 4px; }
+    </style>
+</head>
+<body>
+<h1>NVR Admin Panel (demo)</h1>
+<p class="hint">
+    Демонстрационная панель: создаём адреса и NVR'ы для тестового пользователя.
+</p>
+
+<div class="grid">
+    <div class="card">
+        <h2>Создать адрес</h2>
+        <form id="addressForm">
+            <label>Название (label)</label>
+            <input type="text" name="label" placeholder="Дом, Офис" required>
+
+            <label>Город</label>
+            <input type="text" name="city" placeholder="Almaty">
+
+            <label>Улица</label>
+            <input type="text" name="street" placeholder="Абая">
+
+            <label>Дом</label>
+            <input type="text" name="house" placeholder="10">
+
+            <label>Квартира</label>
+            <input type="text" name="apartment">
+
+            <label>Комментарий</label>
+            <input type="text" name="comment">
+
+            <button type="submit">Создать адрес</button>
+            <div class="hint" id="addressMsg"></div>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Создать NVR</h2>
+        <form id="deviceForm">
+            <label>Название</label>
+            <input type="text" name="name" placeholder="Домашний NVR" required>
+
+            <label>IP</label>
+            <input type="text" name="ip" id="ipInput" placeholder="95.105.78.119" required>
+
+            <label>Port</label>
+            <input type="number" name="port" value="5543" required>
+
+            <label>Vendor</label>
+            <select name="vendor" id="vendorSelect">
+                <option value="Hikvision">Hikvision</option>
+                <option value="Dahua">Dahua</option>
+                <option value="Uniview">Uniview</option>
+                <option value="Ezviz">Ezviz</option>
+                <option value="">Другое / неизвестно</option>
+            </select>
+
+            <label>Адрес</label>
+            <select name="addressId" id="addressSelect" required>
+                <option value="">Выберите адрес...</option>
+            </select>
+
+            <label>Timezone</label>
+            <input type="text" name="timezone" value="Asia/Almaty">
+
+            <label>Количество камер (camerasCount)</label>
+            <input type="number" name="camerasCount" value="8" min="1">
+
+            <label>Viewer login</label>
+            <input type="text" name="viewerUsername" value="viewer">
+
+            <label>Viewer password</label>
+            <input type="text" name="viewerPassword" value="viewer123">
+
+            <button type="submit">Создать NVR</button>
+            <div class="hint" id="deviceMsg"></div>
+        </form>
+    </div>
+</div>
+
+<div class="grid">
+    <div class="card">
+        <h2>Адреса</h2>
+        <table id="addressesTable">
+            <thead>
+            <tr>
+                <th>ID</th>
+                <th>Label</th>
+                <th>Город</th>
+                <th>Улица</th>
+                <th>Дом</th>
+                <th>Действия</th>
+            </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2>NVR-устройства</h2>
+        <table id="devicesTable">
+            <thead>
+            <tr>
+                <th>ID</th>
+                <th>Название</th>
+                <th>IP:Port</th>
+                <th>Vendor</th>
+                <th>Timezone</th>
+                <th>Cams</th>
+                <th>AddressId</th>
+                <th>Viewer</th>
+                <th>RTSP (ch=1)</th>
+                <th>Действия</th>
+            </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    const base = ''; // тот же origin, где крутится nvr-service (8082)
+    const adminHeaders = { 'X-Admin-User': '1' };
+
+    function normalizeIp(ip) {
+        if (!ip) return '';
+        const trimmed = ip.trim();
+        if (trimmed === 'localhost') {
+            return '127.0.0.1';
+        }
+        if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+            try {
+                const url = new URL(trimmed);
+                return url.hostname;
+            } catch (_) {
+                return trimmed;
+            }
+        }
+        return trimmed;
+    }
+
+    async function loadAddresses() {
+        const res = await fetch(base + '/admin/api/addresses', {
+            headers: adminHeaders
+        });
+        const data = await res.json();
+        const tbody = document.querySelector('#addressesTable tbody');
+        const select = document.getElementById('addressSelect');
+        tbody.innerHTML = '';
+        select.innerHTML = '<option value="">Выберите адрес...</option>';
+
+        if (Array.isArray(data) && data.length) {
+            data.forEach(a => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${a.id}</td>
+                    <td>${a.label ?? ''}</td>
+                    <td>${a.city ?? ''}</td>
+                    <td>${a.street ?? ''}</td>
+                    <td>${a.house ?? ''}</td>
+                    <td>
+                        <button type="button" class="danger" data-delete-address-id="${a.id}">Удалить</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+
+                const opt = document.createElement('option');
+                opt.value = a.id;
+                opt.textContent = `${a.id} — ${a.label || 'без названия'}`;
+                select.appendChild(opt);
+            });
+        } else {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td colspan="5" style="text-align:center;color:#888;">Нет адресов</td>`;
+            tbody.appendChild(tr);
+        }
+    }
+
+    async function loadDevices() {
+        const res = await fetch(base + '/admin/api/devices', {
+            headers: adminHeaders
+        });
+        const data = await res.json();
+        const tbody = document.querySelector('#devicesTable tbody');
+        tbody.innerHTML = '';
+
+        data.forEach(d => {
+            const rtsp = (d.viewerLogin && d.viewerPassword)
+                ? `rtsp://${d.viewerLogin}:${d.viewerPassword}@${d.ip}:${d.port}/cam/realmonitor?channel=1&subtype=1`
+                : '';
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${d.id}</td>
+                <td>${d.name}</td>
+                <td>${d.ip}:${d.port}</td>
+                <td>${d.vendor ?? ''}</td>
+                <td>${d.timezone ?? ''}</td>
+                <td>${d.camerasCount ?? ''}</td>
+                <td>${d.addressId ?? ''}</td>
+                <td>${d.viewerLogin ?? ''}</td>
+                <td><code>${rtsp}</code></td>
+                <td>
+                    <button type="button" class="danger" data-delete-id="${d.id}">Удалить</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    document.getElementById('addressForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        const payload = {
+            label: form.label.value,
+            city: form.city.value || null,
+            street: form.street.value || null,
+            house: form.house.value || null,
+            apartment: form.apartment.value || null,
+            comment: form.comment.value || null
+        };
+        const res = await fetch(base + '/admin/api/addresses', {
+            method: 'POST',
+            headers: { ...adminHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+            document.getElementById('addressMsg').textContent = 'Адрес создан';
+            form.reset();
+            loadAddresses();
+        } else {
+            document.getElementById('addressMsg').textContent = 'Ошибка при создании адреса';
+        }
+    });
+
+    document.getElementById('addressesTable').addEventListener('click', async (e) => {
+        const btn = e.target.closest('button[data-delete-address-id]');
+        if (!btn) return;
+        const id = btn.getAttribute('data-delete-address-id');
+        if (!confirm(`Удалить адрес #${id}?`)) return;
+        const res = await fetch(`${base}/admin/api/addresses/${id}`, {
+            method: 'DELETE',
+            headers: adminHeaders
+        });
+        if (res.ok) {
+            loadAddresses();
+        } else {
+            const text = await res.text();
+            alert('Не удалось удалить адрес: ' + text);
+        }
+    });
+
+    document.getElementById('deviceForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const form = e.target;
+
+        // Гарантируем viewer-учётку даже если поля оставили пустыми
+        if (!form.viewerUsername.value) {
+            form.viewerUsername.value = `viewer-${Date.now()}`;
+        }
+        if (!form.viewerPassword.value) {
+            form.viewerPassword.value = Math.random().toString(36).slice(2, 10);
+        }
+
+        const viewerUsers = (form.viewerUsername.value && form.viewerPassword.value)
+            ? [{
+                role: 'user_default',
+                username: form.viewerUsername.value,
+                password: form.viewerPassword.value
+            }]
+            : [];
+
+        const payload = {
+            name: form.name.value,
+            ip: normalizeIp(form.ip.value) || '127.0.0.1',
+            port: Number(form.port.value),
+            vendor: form.vendor.value || null,
+            addressId: form.addressId.value ? Number(form.addressId.value) : null,
+            timezone: form.timezone.value || null,
+            camerasCount: form.camerasCount.value ? Number(form.camerasCount.value) : null,
+            users: viewerUsers
+        };
+        const res = await fetch(base + '/admin/api/devices', {
+            method: 'POST',
+            headers: { ...adminHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+            document.getElementById('deviceMsg').textContent = 'NVR создан';
+            loadDevices();
+        } else {
+            const text = await res.text();
+            document.getElementById('deviceMsg').textContent = 'Ошибка при создании NVR: ' + text;
+        }
+    });
+
+    document.getElementById('devicesTable').addEventListener('click', async (e) => {
+        const btn = e.target.closest('button[data-delete-id]');
+        if (!btn) return;
+        const id = btn.getAttribute('data-delete-id');
+        if (!confirm(`Удалить устройство #${id}?`)) return;
+        const res = await fetch(`${base}/admin/api/devices/${id}`, {
+            method: 'DELETE',
+            headers: adminHeaders
+        });
+        if (res.ok) {
+            loadDevices();
+        } else {
+            const text = await res.text();
+            alert('Не удалось удалить: ' + text);
+        }
+    });
+
+    // автозаполнение IP/вендора
+    (function prefillDefaults() {
+        const ipInput = document.getElementById('ipInput');
+        if (ipInput && !ipInput.value) {
+            const host = window.location.hostname;
+            ipInput.value = normalizeIp(host) || '127.0.0.1';
+        }
+
+        const vendorSelect = document.getElementById('vendorSelect');
+        if (vendorSelect) {
+            vendorSelect.value = 'Hikvision';
+        }
+    })();
+
+    // первичная загрузка
+    loadAddresses();
+    loadDevices();
+</script>
+</body>
+</html>

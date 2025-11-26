@@ -3,8 +3,12 @@ package com.nvr.nvrservice.service;
 import com.nvr.nvrservice.api.dto.CreateAddressRequest;
 import com.nvr.nvrservice.domain.Address;
 import com.nvr.nvrservice.repo.AddressRepo;
+import com.nvr.nvrservice.repo.NvrDeviceRepo;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpStatus;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -14,6 +18,7 @@ import java.util.List;
 public class AddressService {
 
     private final AddressRepo repository;
+    private final NvrDeviceRepo deviceRepo;
 
     // getForOwner - дай все адреса этого пользователя
     public List<Address> getForOwner(Long ownerId) {
@@ -42,5 +47,19 @@ public class AddressService {
         a.setCreatedAt(OffsetDateTime.now());
         a.setUpdatedAt(OffsetDateTime.now());
         return repository.save(a);
+    }
+
+    @Transactional
+    public void delete(Long ownerId, Long addressId) {
+        Address address = repository.findById(addressId)
+                .filter(a -> a.getOwnerId().equals(ownerId))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Address not found"));
+
+        boolean hasDevices = deviceRepo.existsByAddressEntity_Id(addressId);
+        if (hasDevices) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Address has devices. Remove them first.");
+        }
+
+        repository.delete(address);
     }
 }

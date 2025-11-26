@@ -208,6 +208,7 @@ public class NvrDeviceService {
         var ctx = userCtxOrThrow();
         NvrDevice device = repo.findByIdAndOwnerId(id, ctx.userId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+        deviceUsers.deleteByDeviceId(device.getId());
         repo.delete(device);
     }
 
