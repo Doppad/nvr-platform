@@ -22,6 +22,9 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.net.InetSocketAddress;
+import java.net.Socket;
+
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -53,6 +56,10 @@ public class NvrDeviceService {
             addressLabel = dev.getAddressEntity().getLabel();
         }
 
+        // Простейшая проверка доступности IP:порта.
+        // Это синхронный connect с небольшим таймаутом, подходит как первый MVP.
+        String status = computeStatus(dev.getIp(), dev.getPort());
+
         return new DeviceDto(
                 dev.getId(),
                 dev.getName(),
@@ -67,7 +74,8 @@ public class NvrDeviceService {
                 decryptedPass,
 
                 addressId,
-                addressLabel
+                addressLabel,
+                status
         );
     }
 
@@ -187,6 +195,24 @@ public class NvrDeviceService {
         }
 
         return page.map(this::toDto);
+    }
+
+    /**
+     * Простейшая синхронная проверка: пробуем открыть TCP-соединение к ip:port.
+     * ONLINE  — если connect прошёл в пределах таймаута,
+     * OFFLINE — если получили исключение/таймаут,
+     * UNKNOWN — если ip/port не заданы.
+     */
+    private String computeStatus(String ip, Integer port) {
+        if (ip == null || ip.isBlank() || port == null) {
+            return "UNKNOWN";
+        }
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(ip, port), 1500); // 1.5 секунды таймаут
+            return "ONLINE";
+        } catch (Exception e) {
+            return "OFFLINE";
+        }
     }
 
     @Transactional

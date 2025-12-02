@@ -25,4 +25,7 @@ public class DeviceDto {
     // Новый блок: адрес
     Long addressId;
     String addressLabel;
+
+    // Простой статус доступности устройства (ONLINE / OFFLINE / UNKNOWN)
+    String status;
 }

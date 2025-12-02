@@ -19,6 +19,43 @@
         th { background: #fafafa; font-weight: 600; }
         code { background: #000; color: #0f0; padding: 2px 4px; border-radius: 4px; font-size: 12px; }
         .hint { font-size: 12px; color: #777; margin-top: 4px; }
+        .status-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            margin-right: 4px;
+            background: #d1d5db; /* серый по умолчанию */
+        }
+        .status-online { background: #16a34a; }  /* зелёный */
+        .status-offline { background: #dc2626; } /* красный */
+        .channels-row td {
+            background: #f9fafb;
+            border-top: none;
+        }
+        .channel-pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 6px;
+            margin: 2px;
+            border-radius: 999px;
+            font-size: 12px;
+            background: #e5e7eb;
+        }
+        .channel-pill .status-dot {
+            width: 8px;
+            height: 8px;
+        }
+        .btn-link {
+            border: none;
+            background: transparent;
+            color: #2563eb;
+            padding: 0;
+            margin: 0 4px;
+            cursor: pointer;
+            font-size: 12px;
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
@@ -123,13 +160,13 @@
             <tr>
                 <th>ID</th>
                 <th>Название</th>
+                <th>Статус</th>
                 <th>IP:Port</th>
                 <th>Vendor</th>
                 <th>Timezone</th>
                 <th>Cams</th>
                 <th>AddressId</th>
                 <th>Viewer</th>
-                <th>RTSP (ch=1)</th>
                 <th>Действия</th>
             </tr>
             </thead>
@@ -202,6 +239,23 @@
         }
     }
 
+    function guessOnlineStatus(device) {
+        // Берём статус с бэка, если он есть (ONLINE / OFFLINE / UNKNOWN),
+        // иначе — возвращаем "unknown".
+        if (!device) return 'unknown';
+        const raw = (device.status || '').toUpperCase();
+        if (raw === 'ONLINE') return 'online';
+        if (raw === 'OFFLINE') return 'offline';
+        if (raw === 'UNKNOWN') return 'unknown';
+        return 'unknown';
+    }
+
+    function buildRtsp(device, channel) {
+        if (!device || !device.viewerLogin || !device.viewerPassword || !device.ip || !device.port) return '';
+        const ch = channel ?? 1;
+        return `rtsp://${device.viewerLogin}:${device.viewerPassword}@${device.ip}:${device.port}/cam/realmonitor?channel=${ch}&subtype=1`;
+    }
+
     async function loadDevices() {
         const res = await fetch(base + '/admin/api/devices', {
             headers: getAdminHeaders()
@@ -210,27 +264,73 @@
         const tbody = document.querySelector('#devicesTable tbody');
         tbody.innerHTML = '';
 
+        // кешируем устройства для работы кнопок копирования/открытия
+        window.__devicesCache = Array.isArray(data) ? data : [];
+
         data.forEach(d => {
-            const rtsp = (d.viewerLogin && d.viewerPassword)
-                ? `rtsp://${d.viewerLogin}:${d.viewerPassword}@${d.ip}:${d.port}/cam/realmonitor?channel=1&subtype=1`
-                : '';
+            const status = guessOnlineStatus(d);
+            const dotClass =
+                status === 'online' ? 'status-dot status-online'
+                    : status === 'offline' ? 'status-dot status-offline'
+                    : 'status-dot';
 
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td>${d.id}</td>
                 <td>${d.name}</td>
+                <td>
+                    <span class="${dotClass}"></span>
+                    <span>${status === 'online' ? 'В сети' : status === 'offline' ? 'Не в сети' : 'Неизвестно'}</span>
+                </td>
                 <td>${d.ip}:${d.port}</td>
                 <td>${d.vendor ?? ''}</td>
                 <td>${d.timezone ?? ''}</td>
                 <td>${d.camerasCount ?? ''}</td>
                 <td>${d.addressId ?? ''}</td>
                 <td>${d.viewerLogin ?? ''}</td>
-                <td><code>${rtsp}</code></td>
                 <td>
+                    <button type="button" class="btn-link" data-toggle-channels="${d.id}">Каналы</button>
                     <button type="button" class="danger" data-delete-id="${d.id}">Удалить</button>
                 </td>
             `;
             tbody.appendChild(tr);
+
+            // строка для каналов (разворачивается по кнопке)
+            const channelsTr = document.createElement('tr');
+            channelsTr.className = 'channels-row';
+            channelsTr.dataset.parentId = String(d.id);
+            channelsTr.style.display = 'none';
+
+            const col = document.createElement('td');
+            col.colSpan = 10;
+
+            const cams = d.camerasCount ?? 0;
+            if (cams > 0) {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'hint';
+                wrapper.textContent = 'Каналы:';
+
+                const list = document.createElement('div');
+                for (let ch = 1; ch <= cams; ch++) {
+                    const pill = document.createElement('span');
+                    pill.className = 'channel-pill';
+                    pill.innerHTML = `
+                        <span class="status-dot ${dotClass}"></span>
+                        <span>CH ${ch}</span>
+                        <button type="button" class="btn-link" data-copy-rtsp="${d.id}" data-channel="${ch}">Скопировать RTSP</button>
+                        <a class="btn-link" data-open-rtsp="${d.id}" data-channel="${ch}" href="#">Открыть</a>
+                    `;
+                    list.appendChild(pill);
+                }
+
+                col.appendChild(wrapper);
+                col.appendChild(list);
+            } else {
+                col.innerHTML = '<span class="hint">Камеры не заданы (camerasCount = 0)</span>';
+            }
+
+            channelsTr.appendChild(col);
+            tbody.appendChild(channelsTr);
         });
     }
 
@@ -321,21 +421,75 @@
     });
 
     document.getElementById('devicesTable').addEventListener('click', async (e) => {
-        const btn = e.target.closest('button[data-delete-id]');
-        if (!btn) return;
-        const id = btn.getAttribute('data-delete-id');
-        if (!confirm(`Удалить устройство #${id}?`)) return;
-        const res = await fetch(`${base}/admin/api/devices/${id}`, {
-            method: 'DELETE',
-            headers: getAdminHeaders()
-        });
-        if (res.ok) {
-            loadDevices();
-        } else {
-            const text = await res.text();
-            alert('Не удалось удалить: ' + text);
+        const target = e.target;
+
+        // удалить устройство
+        const deleteBtn = target.closest('button[data-delete-id]');
+        if (deleteBtn) {
+            const id = deleteBtn.getAttribute('data-delete-id');
+            if (!confirm(`Удалить устройство #${id}?`)) return;
+            const res = await fetch(`${base}/admin/api/devices/${id}`, {
+                method: 'DELETE',
+                headers: getAdminHeaders()
+            });
+            if (res.ok) {
+                loadDevices();
+            } else {
+                const text = await res.text();
+                alert('Не удалось удалить: ' + text);
+            }
+            return;
+        }
+
+        // развернуть/свернуть каналы
+        const toggleBtn = target.closest('button[data-toggle-channels]');
+        if (toggleBtn) {
+            const id = toggleBtn.getAttribute('data-toggle-channels');
+            const row = document.querySelector(`tr.channels-row[data-parent-id="${id}"]`);
+            if (row) {
+                row.style.display = row.style.display === 'none' ? '' : 'none';
+            }
+            return;
+        }
+
+        // скопировать RTSP
+        const copyBtn = target.closest('button[data-copy-rtsp]');
+        if (copyBtn) {
+            const deviceId = copyBtn.getAttribute('data-copy-rtsp');
+            const channel = Number(copyBtn.getAttribute('data-channel') || '1');
+            const device = (window.__devicesCache || []).find(d => String(d.id) === String(deviceId));
+            const rtsp = buildRtsp(device, channel);
+            if (!rtsp) {
+                alert('Не удалось сформировать RTSP');
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(rtsp);
+                alert('RTSP скопирован в буфер обмена');
+            } catch (_) {
+                alert('Скопируйте вручную: ' + rtsp);
+            }
+            return;
+        }
+
+        // открыть RTSP во внешнем плеере
+        const openLink = target.closest('a[data-open-rtsp]');
+        if (openLink) {
+            e.preventDefault();
+            const deviceId = openLink.getAttribute('data-open-rtsp');
+            const channel = Number(openLink.getAttribute('data-channel') || '1');
+            const device = (window.__devicesCache || []).find(d => String(d.id) === String(deviceId));
+            const rtsp = buildRtsp(device, channel);
+            if (!rtsp) {
+                alert('Не удалось сформировать RTSP');
+                return;
+            }
+            // пробуем открыть через custom-схему rtsp://
+            window.location.href = rtsp;
+            return;
         }
     });
+
 
     // автозаполнение IP/вендора
     (function prefillDefaults() {
