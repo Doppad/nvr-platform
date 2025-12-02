@@ -16,6 +16,7 @@ public interface NvrDeviceRepo extends JpaRepository<NvrDevice, Long> {
 
     // GET /nvr/devices/by-address/{addressId}
     Page<NvrDevice> findByOwnerIdAndAddressEntity_Id(Long ownerId, Long addressId, Pageable pageable);
+    Page<NvrDevice> findByAddressEntity_Id(Long addressId, Pageable pageable);
 
     boolean existsByAddressEntity_Id(Long addressId);
 }

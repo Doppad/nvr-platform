@@ -27,6 +27,15 @@ public class AppUser { // таблица юзеров
     @Column(nullable = false)
     private Boolean isActive = true;
 
+    /**
+     * Роль пользователя в системе.
+     * По умолчанию обычный пользователь: USER.
+     * Для супер-админа в БД можно установить значение SUPER_ADMIN.
+     */
+    @Column(nullable = false)
+    @Builder.Default
+    private String role = "USER";
+
     @Builder.Default
     @Column(nullable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
@@ -35,5 +44,6 @@ public class AppUser { // таблица юзеров
     void prePersist() {
         if (createdAt == null) createdAt = OffsetDateTime.now();
         if (isActive == null) isActive = true;
+        if (role == null) role = "USER";
     }
 }

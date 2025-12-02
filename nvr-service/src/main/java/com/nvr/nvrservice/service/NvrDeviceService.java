@@ -87,11 +87,15 @@ public class NvrDeviceService {
 
         if (ctx == null) {
             // если почему-то нет — соберём минимальный контекст
-            ctx = new UserContext(userId, null, null, 14);
+            ctx = new UserContext(userId, null, null, null, 14);
         }
 
         if (ctx.userId() == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "No user in context");
         return ctx;
+    }
+
+    private boolean isSuperAdmin(UserContext ctx) {
+        return ctx.role() != null && "SUPER_ADMIN".equalsIgnoreCase(ctx.role());
     }
 
     @Transactional
@@ -161,6 +165,12 @@ public class NvrDeviceService {
     @Transactional(readOnly = true)
     public NvrDevice get(Long ownerIdIgnored, Long id) {
         var ctx = userCtxOrThrow();
+
+        if (isSuperAdmin(ctx)) {
+            return repo.findById(id)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+        }
+
         return repo.findByIdAndOwnerId(id, ctx.userId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
     }
@@ -168,15 +178,29 @@ public class NvrDeviceService {
     @Transactional(readOnly = true)
     public Page<DeviceDto> list(Long ownerIdIgnored, Pageable pageable) {
         var ctx = userCtxOrThrow();
-        Page<NvrDevice> page = repo.findByOwnerId(ctx.userId(), pageable);
+        Page<NvrDevice> page;
+
+        if (isSuperAdmin(ctx)) {
+            page = repo.findAll(pageable);
+        } else {
+            page = repo.findByOwnerId(ctx.userId(), pageable);
+        }
+
         return page.map(this::toDto);
     }
 
     @Transactional
     public DeviceDto update(Long ownerIdIgnored, Long id, UpdateDeviceReq req) {
         var ctx = userCtxOrThrow();
-        NvrDevice device = repo.findByIdAndOwnerId(id, ctx.userId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+        NvrDevice device;
+
+        if (isSuperAdmin(ctx)) {
+            device = repo.findById(id)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+        } else {
+            device = repo.findByIdAndOwnerId(id, ctx.userId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+        }
 
         if (req.getName() != null) device.setName(req.getName());
         if (req.getIp() != null) device.setIp(req.getIp());
@@ -191,7 +215,7 @@ public class NvrDeviceService {
 
         if (req.getAddressId() != null) {
             var newAddress = addressRepo.findById(req.getAddressId())
-                    .filter(a -> a.getOwnerId().equals(ctx.userId()))
+                    .filter(a -> isSuperAdmin(ctx) || a.getOwnerId().equals(ctx.userId()))
                     .orElseThrow(() -> new ResponseStatusException(
                             HttpStatus.NOT_FOUND,
                             "Address not found or does not belong to user"
@@ -206,8 +230,15 @@ public class NvrDeviceService {
     @Transactional
     public void delete(Long ownerIdIgnored, Long id) {
         var ctx = userCtxOrThrow();
-        NvrDevice device = repo.findByIdAndOwnerId(id, ctx.userId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+        NvrDevice device;
+
+        if (isSuperAdmin(ctx)) {
+            device = repo.findById(id)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+        } else {
+            device = repo.findByIdAndOwnerId(id, ctx.userId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+        }
         deviceUsers.deleteByDeviceId(device.getId());
         repo.delete(device);
     }
@@ -216,13 +247,20 @@ public class NvrDeviceService {
     public Page<DeviceDto> listByAddress(Long addressId, Pageable pageable) {
         var ctx = userCtxOrThrow();
 
-        // 1) Проверяем, что адрес принадлежит этому пользователю
-        addressRepo.findById(addressId)
-                .filter(a -> a.getOwnerId().equals(ctx.userId()))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Address not found"));
+        Page<NvrDevice> page;
 
-        // 2) Берём все NVR по адресу
-        Page<NvrDevice> page = repo.findByOwnerIdAndAddressEntity_Id(ctx.userId(), addressId, pageable);
+        if (isSuperAdmin(ctx)) {
+            // супер-админ видит все устройства по адресу, независимо от владельца
+            page = repo.findByAddressEntity_Id(addressId, pageable);
+        } else {
+            // 1) Проверяем, что адрес принадлежит этому пользователю
+            addressRepo.findById(addressId)
+                    .filter(a -> a.getOwnerId().equals(ctx.userId()))
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Address not found"));
+
+            // 2) Берём все NVR по адресу
+            page = repo.findByOwnerIdAndAddressEntity_Id(ctx.userId(), addressId, pageable);
+        }
 
         // 3) Конвертируем в DTO
         return page.map(this::toDto);

@@ -69,6 +69,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 String plan = claims.get("plan", String.class);
                 Integer maxCameras = claims.get("maxCameras", Integer.class);
                 Integer archiveDays = claims.get("archiveDays", Integer.class);
+                String role = claims.get("role", String.class);
                 // if (maxCameras == null) maxCameras = null; // или просто не трогать
                 if (archiveDays == null) archiveDays = 14;
 
@@ -78,7 +79,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     SecurityContextHolder.getContext().setAuthentication(auth);
 
                     // Кладём наш контекст в request-атрибут (забираем его в сервисах при необходимости)
-                    request.setAttribute("userContext", new UserContext(userId, plan, maxCameras, archiveDays));
+                    request.setAttribute("userContext", new UserContext(userId, role, plan, maxCameras, archiveDays));
                 } else {
                     System.out.println("JWT parsed but userId is NULL (sub=" + claims.getSubject() + ")");
                     SecurityContextHolder.clearContext();

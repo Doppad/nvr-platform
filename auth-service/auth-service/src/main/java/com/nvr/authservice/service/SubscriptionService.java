@@ -49,8 +49,9 @@ public class SubscriptionService {
             var free = planRepo.findByCode("FREE").orElseThrow(() -> new IllegalStateException("FREE план отсутствует в БД"));
 
             return Map.of(
-                    "plan", free.getCode(),     // "FREE"
-                    "archiveDays", free.getArchiveDays()        // 14
+                    "plan", free.getCode(),                 // "FREE"
+                    "archiveDays", free.getArchiveDays(),   // 14
+                    "role", user.getRole() == null ? "USER" : user.getRole()
             );
         }
 
@@ -64,7 +65,8 @@ public class SubscriptionService {
         // Сейчас CAM_1 и CAM_3 оба дают нам 30 дней
         return Map.of(
                 "plan", plan.getCode(),
-                "archiveDays", plan.getArchiveDays()
+                "archiveDays", plan.getArchiveDays(),
+                "role", user.getRole() == null ? "USER" : user.getRole()
         );
     }
 

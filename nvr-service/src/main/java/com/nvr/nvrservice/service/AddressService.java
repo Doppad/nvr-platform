@@ -4,6 +4,7 @@ import com.nvr.nvrservice.api.dto.CreateAddressRequest;
 import com.nvr.nvrservice.domain.Address;
 import com.nvr.nvrservice.repo.AddressRepo;
 import com.nvr.nvrservice.repo.NvrDeviceRepo;
+import com.nvr.nvrservice.security.UserContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,9 +21,33 @@ public class AddressService {
     private final AddressRepo repository;
     private final NvrDeviceRepo deviceRepo;
 
+    private UserContext userCtxOrThrow() {
+        // Аналогично NvrDeviceService, но здесь не хотим тащить SecurityContext напрямую,
+        // поэтому предполагаем, что UserContext уже положен в request-атрибут фильтром.
+        var attrs = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        UserContext ctx = null;
+        if (attrs instanceof org.springframework.web.context.request.ServletRequestAttributes sra) {
+            Object uc = sra.getRequest().getAttribute("userContext");
+            if (uc instanceof UserContext u) ctx = u;
+        }
+        if (ctx == null || ctx.userId() == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "No user in context");
+        }
+        return ctx;
+    }
+
+    private boolean isSuperAdmin(UserContext ctx) {
+        return ctx.role() != null && "SUPER_ADMIN".equalsIgnoreCase(ctx.role());
+    }
+
     // getForOwner - дай все адреса этого пользователя
     public List<Address> getForOwner(Long ownerId) {
-        return repository.findByOwnerId(ownerId);
+        UserContext ctx = userCtxOrThrow();
+        if (isSuperAdmin(ctx)) {
+            // SUPER_ADMIN видит все адреса в системе
+            return repository.findAll();
+        }
+        return repository.findByOwnerId(ctx.userId());
     }
 
     /** тут я:

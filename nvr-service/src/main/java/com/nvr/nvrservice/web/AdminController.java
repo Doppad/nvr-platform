@@ -36,8 +36,11 @@ public class AdminController {
     }
 
     private void attachAdminUser(Long userId) {
+        // Здесь мы намеренно НЕ помечаем пользователя как SUPER_ADMIN в контексте,
+        // потому что хотим смотреть систему "как он" (с его правами).
         var ctx = new UserContext(
                 userId,
+                null,     // роль не задаём — работаем строго от лица пользователя
                 "FREE",   // план можно не использовать
                 null,     // max cameras = unlimited
                 14

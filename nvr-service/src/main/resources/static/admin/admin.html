@@ -140,7 +140,13 @@
 
 <script>
     const base = ''; // тот же origin, где крутится nvr-service (8082)
-    const adminHeaders = { 'X-Admin-User': '1' };
+
+    // Текущий пользователь, от имени которого супер-админ смотрит систему
+    let currentAdminUserId = Number(localStorage.getItem('nvr_admin_user_id') || '1') || 1;
+
+    function getAdminHeaders() {
+        return { 'X-Admin-User': String(currentAdminUserId) };
+    }
 
     function normalizeIp(ip) {
         if (!ip) return '';
@@ -161,7 +167,7 @@
 
     async function loadAddresses() {
         const res = await fetch(base + '/admin/api/addresses', {
-            headers: adminHeaders
+            headers: getAdminHeaders()
         });
         const data = await res.json();
         const tbody = document.querySelector('#addressesTable tbody');
@@ -198,7 +204,7 @@
 
     async function loadDevices() {
         const res = await fetch(base + '/admin/api/devices', {
-            headers: adminHeaders
+            headers: getAdminHeaders()
         });
         const data = await res.json();
         const tbody = document.querySelector('#devicesTable tbody');
@@ -241,7 +247,7 @@
         };
         const res = await fetch(base + '/admin/api/addresses', {
             method: 'POST',
-            headers: { ...adminHeaders, 'Content-Type': 'application/json' },
+            headers: { ...getAdminHeaders(), 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
         if (res.ok) {
@@ -260,7 +266,7 @@
         if (!confirm(`Удалить адрес #${id}?`)) return;
         const res = await fetch(`${base}/admin/api/addresses/${id}`, {
             method: 'DELETE',
-            headers: adminHeaders
+            headers: getAdminHeaders()
         });
         if (res.ok) {
             loadAddresses();
@@ -302,7 +308,7 @@
         };
         const res = await fetch(base + '/admin/api/devices', {
             method: 'POST',
-            headers: { ...adminHeaders, 'Content-Type': 'application/json' },
+            headers: { ...getAdminHeaders(), 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
         if (res.ok) {
@@ -321,7 +327,7 @@
         if (!confirm(`Удалить устройство #${id}?`)) return;
         const res = await fetch(`${base}/admin/api/devices/${id}`, {
             method: 'DELETE',
-            headers: adminHeaders
+            headers: getAdminHeaders()
         });
         if (res.ok) {
             loadDevices();
@@ -345,7 +351,41 @@
         }
     })();
 
-    // первичная загрузка
+    // Блок выбора пользователя, от имени которого смотрим систему
+    (function setupImpersonationControls() {
+        const panel = document.createElement('div');
+        panel.className = 'card';
+        panel.style.marginBottom = '20px';
+        panel.innerHTML = `
+            <h2>SUPER_ADMIN: просмотр как пользователь</h2>
+            <label>ID пользователя</label>
+            <input type="number" id="impersonateUserId" min="1">
+            <div class="hint">Выберите ID пользователя, чьи адреса и устройства вы хотите видеть.</div>
+            <button type="button" id="applyImpersonation">Применить</button>
+        `;
+
+        const body = document.body;
+        body.insertBefore(panel, body.querySelector('.grid'));
+
+        const input = document.getElementById('impersonateUserId');
+        const btn = document.getElementById('applyImpersonation');
+
+        input.value = String(currentAdminUserId);
+
+        btn.addEventListener('click', () => {
+            const val = Number(input.value);
+            if (!val || val <= 0) {
+                alert('Введите корректный ID пользователя');
+                return;
+            }
+            currentAdminUserId = val;
+            localStorage.setItem('nvr_admin_user_id', String(currentAdminUserId));
+            loadAddresses();
+            loadDevices();
+        });
+    })();
+
+    // первичная загрузка для сохранённого пользователя
     loadAddresses();
     loadDevices();
 </script>
