@@ -22,25 +22,16 @@ public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
 
-    @Bean
-    public UserDetailsService adminUserDetailsService(
-            @Value("${admin.basic.username:NVR_Admin}") String username,
-            @Value("${admin.basic.password:c0Kg6v_BW}") String password
-    ) {
-        UserDetails admin = User.withUsername(username)
-                .password("{noop}" + password) // для простоты: без шифрования пароля
-                .roles("ADMIN")
-                .build();
-        return new InMemoryUserDetailsManager(admin);
-    }
+    // Basic Auth для /admin/** временно отключён.
+    // Если нужно будет снова защищать админку, можно вернуть in-memory UserDetailsService
+    // и правила доступа hasRole("ADMIN").
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 // Отключаем ненужные механизмы
                 .csrf(csrf -> csrf.disable())
-                // Включаем httpBasic, чтобы защитить /admin/**
-                .httpBasic(Customizer.withDefaults())
+                .httpBasic(httpBasic -> httpBasic.disable())
                 .formLogin(form -> form.disable())
 
                 // Настраиваем stateless-сессию (только через JWT)
@@ -57,7 +48,7 @@ public class SecurityConfig {
                                 "/swagger-ui/**",      // Swagger UI
                                 "/v3/api-docs/**"      // OpenAPI
                         ).permitAll()
-                        .requestMatchers("/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/admin/**").permitAll()
                         .anyRequest().authenticated()
                 )
 
