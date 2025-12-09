@@ -35,6 +35,10 @@ public class NvrDevice {
     @Column(nullable = false)
     private Integer port;
 
+    // HTTP порт для API запросов (обычно 80 или 8080-8082)
+    @Column(name = "http_port")
+    private Integer httpPort;
+
     // legacy-строка, которую можно будет выпилить, когда фронт переедет на Address
     private String address;
 

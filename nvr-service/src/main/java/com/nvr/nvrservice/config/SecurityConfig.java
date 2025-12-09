@@ -48,7 +48,7 @@ public class SecurityConfig {
                                 "/swagger-ui/**",      // Swagger UI
                                 "/v3/api-docs/**"      // OpenAPI
                         ).permitAll()
-                        .requestMatchers("/admin/**").permitAll()
+                        .requestMatchers("/admin/**", "/api/admin/**").permitAll()
                         .anyRequest().authenticated()
                 )
 

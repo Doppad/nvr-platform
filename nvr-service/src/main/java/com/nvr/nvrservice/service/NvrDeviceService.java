@@ -1,11 +1,14 @@
 package com.nvr.nvrservice.service;
 
+import com.nvr.nvrservice.api.dto.ChannelDto;
 import com.nvr.nvrservice.api.dto.CreateDeviceReq;
 import com.nvr.nvrservice.api.dto.DeviceDto;
 import com.nvr.nvrservice.api.dto.UpdateDeviceReq;
+import com.nvr.nvrservice.domain.NvrCamera;
 import com.nvr.nvrservice.domain.NvrDevice;
 import com.nvr.nvrservice.domain.NvrDeviceUser;
 import com.nvr.nvrservice.repo.AddressRepo;
+import com.nvr.nvrservice.repo.NvrCameraRepo;
 import com.nvr.nvrservice.repo.NvrDeviceRepo;
 import com.nvr.nvrservice.repo.NvrDeviceUserRepo;
 import com.nvr.nvrservice.security.CryptoService;
@@ -24,6 +27,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.util.List;
 
 @Slf4j
 @Service
@@ -33,6 +37,7 @@ public class NvrDeviceService {
     private final NvrDeviceRepo repo;
     private final NvrDeviceUserRepo deviceUsers;
     private final AddressRepo addressRepo;
+    private final NvrCameraRepo cameraRepo;
     private final CryptoService crypto;
 
     private DeviceDto toDto(NvrDevice dev) {
@@ -251,6 +256,55 @@ public class NvrDeviceService {
 
         repo.save(device);
         return toDto(device);
+    }
+
+    /**
+     * Получает список каналов для устройства.
+     *
+     * @param ownerIdIgnored игнорируется (используется из контекста)
+     * @param deviceId ID устройства
+     * @return список каналов
+     */
+    @Transactional(readOnly = true)
+    public List<ChannelDto> getChannels(Long ownerIdIgnored, Long deviceId) {
+        var ctx = userCtxOrThrow();
+
+        NvrDevice device;
+        if (isSuperAdmin(ctx)) {
+            device = repo.findById(deviceId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+        } else {
+            device = repo.findByIdAndOwnerId(deviceId, ctx.userId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+        }
+
+        List<NvrCamera> cameras = cameraRepo.findByDeviceId(deviceId);
+        return cameras.stream()
+                .sorted((a, b) -> Integer.compare(a.getChannelNo(), b.getChannelNo()))
+                .map(camera -> {
+                    ChannelDto dto = new ChannelDto();
+                    // Основные поля
+                    dto.setChannelNumber(camera.getChannelNo());
+                    dto.setChannelNo(camera.getChannelNo()); // alias
+                    dto.setName(camera.getName());
+                    dto.setRtspUrl(camera.getRtspUrl());
+                    // Маппинг active из isActive (проверяется через RTSP)
+                    boolean isActive = camera.getIsActive() != null ? camera.getIsActive() : false;
+                    dto.setActive(isActive);
+                    dto.setIsActive(isActive); // alias
+                    
+                    // Дополнительные поля
+                    dto.setId(camera.getId());
+                    dto.setStatus(camera.getStatus());
+                    dto.setIpAddress(camera.getIpAddress());
+                    dto.setPort(camera.getPort());
+                    dto.setDeviceName(camera.getDeviceName());
+                    dto.setChannelName(camera.getChannelName());
+                    dto.setProtocol(camera.getProtocol());
+                    dto.setType(camera.getType());
+                    return dto;
+                })
+                .toList();
     }
 
     @Transactional

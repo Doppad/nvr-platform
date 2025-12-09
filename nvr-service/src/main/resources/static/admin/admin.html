@@ -56,12 +56,62 @@
             font-size: 12px;
             text-decoration: underline;
         }
+        /* Сетка каналов 4x4 */
+        .channels-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-top: 12px;
+        }
+        .channel-card {
+            background: #fff;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+            transition: all 0.2s;
+            opacity: 1;
+        }
+        .channel-card.active {
+            border-color: #16a34a;
+            background: #f0fdf4;
+        }
+        .channel-card.inactive {
+            opacity: 0.6;
+            background: #f9fafb;
+        }
+        .channel-card .channel-name {
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 8px;
+            color: #111;
+        }
+        .channel-card .channel-status {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            font-size: 12px;
+            margin-bottom: 8px;
+            color: #666;
+        }
+        .channel-card .channel-number {
+            font-size: 11px;
+            color: #999;
+            margin-bottom: 4px;
+        }
+        .channel-card button {
+            width: 100%;
+            margin-top: 8px;
+            padding: 6px;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
 <h1>NVR Admin Panel</h1>
 <p class="hint">
-    Демонстрационная панель
+    Демонстрационная панель | <a href="/admin/channels.html">Управление каналами</a>
 </p>
 
 <div class="grid">
@@ -256,6 +306,53 @@
         return `rtsp://${device.viewerLogin}:${device.viewerPassword}@${device.ip}:${device.port}/cam/realmonitor?channel=${ch}&subtype=1`;
     }
 
+    async function loadChannelsForDevice(deviceId) {
+        try {
+            const res = await fetch(`${base}/admin/api/devices/${deviceId}/channels`, {
+                headers: getAdminHeaders()
+            });
+            if (!res.ok) {
+                console.error('Failed to load channels:', res.statusText);
+                return;
+            }
+            const channels = await res.json();
+            const grid = document.getElementById(`channels-grid-${deviceId}`);
+            if (!grid) return;
+            
+            grid.innerHTML = '';
+            
+            // Сортируем каналы по номеру
+            channels.sort((a, b) => (a.channelNumber || a.channelNo || 0) - (b.channelNumber || b.channelNo || 0));
+            
+            channels.forEach(channel => {
+                const channelNumber = channel.channelNumber || channel.channelNo || 0;
+                const name = channel.name || `Channel${channelNumber}`;
+                const active = channel.active !== undefined ? channel.active : (channel.isActive !== undefined ? channel.isActive : false);
+                const rtspUrl = channel.rtspUrl || '';
+                
+                const card = document.createElement('div');
+                card.className = `channel-card ${active ? 'active' : 'inactive'}`;
+                
+                const statusDot = active ? 'status-online' : 'status-offline';
+                const statusText = active ? 'Online' : 'Offline';
+                
+                card.innerHTML = `
+                    <div class="channel-number">CH ${channelNumber}</div>
+                    <div class="channel-name">${name}</div>
+                    <div class="channel-status">
+                        <span class="status-dot ${statusDot}"></span>
+                        <span>${statusText}</span>
+                    </div>
+                    ${rtspUrl ? `<button type="button" class="btn-link" onclick="window.open('${rtspUrl}', '_blank')">Открыть RTSP</button>` : ''}
+                `;
+                
+                grid.appendChild(card);
+            });
+        } catch (error) {
+            console.error('Error loading channels:', error);
+        }
+    }
+
     async function loadDevices() {
         const res = await fetch(base + '/admin/api/devices', {
             headers: getAdminHeaders()
@@ -310,21 +407,32 @@
                 wrapper.className = 'hint';
                 wrapper.textContent = 'Каналы:';
 
-                const list = document.createElement('div');
-                for (let ch = 1; ch <= cams; ch++) {
-                    const pill = document.createElement('span');
-                    pill.className = 'channel-pill';
-                    pill.innerHTML = `
-                        <span class="status-dot ${dotClass}"></span>
-                        <span>CH ${ch}</span>
-                        <button type="button" class="btn-link" data-copy-rtsp="${d.id}" data-channel="${ch}">Скопировать RTSP</button>
-                        <a class="btn-link" data-open-rtsp="${d.id}" data-channel="${ch}" href="#">Открыть</a>
-                    `;
-                    list.appendChild(pill);
+                // Для устройств Dahua 16ch показываем сетку 4x4
+                if (cams === 16 && d.vendor === 'Dahua') {
+                    const grid = document.createElement('div');
+                    grid.className = 'channels-grid';
+                    grid.id = `channels-grid-${d.id}`;
+                    col.appendChild(wrapper);
+                    col.appendChild(grid);
+                    // Загружаем каналы через API
+                    loadChannelsForDevice(d.id);
+                } else {
+                    // Старый формат для других устройств
+                    const list = document.createElement('div');
+                    for (let ch = 1; ch <= cams; ch++) {
+                        const pill = document.createElement('span');
+                        pill.className = 'channel-pill';
+                        pill.innerHTML = `
+                            <span class="status-dot ${dotClass}"></span>
+                            <span>CH ${ch}</span>
+                            <button type="button" class="btn-link" data-copy-rtsp="${d.id}" data-channel="${ch}">Скопировать RTSP</button>
+                            <a class="btn-link" data-open-rtsp="${d.id}" data-channel="${ch}" href="#">Открыть</a>
+                        `;
+                        list.appendChild(pill);
+                    }
+                    col.appendChild(wrapper);
+                    col.appendChild(list);
                 }
-
-                col.appendChild(wrapper);
-                col.appendChild(list);
             } else {
                 col.innerHTML = '<span class="hint">Камеры не заданы (camerasCount = 0)</span>';
             }

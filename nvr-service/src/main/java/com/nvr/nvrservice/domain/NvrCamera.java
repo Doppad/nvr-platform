@@ -28,4 +28,37 @@ public class NvrCamera {
     @Builder.Default
     @Column(nullable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
+
+    // Поля для поддержки Dahua API (из миграции V4)
+    @Column(name = "ip_address", length = 45)
+    private String ipAddress;
+
+    @Column(name = "port")
+    private Integer port;
+
+    @Column(name = "device_name", length = 255)
+    private String deviceName;
+
+    @Column(name = "channel_name", length = 255)
+    private String channelName;
+
+    @Column(name = "protocol", length = 32)
+    private String protocol;
+
+    @Column(name = "type", length = 64)
+    private String type;
+
+    @Column(name = "rtsp_url", columnDefinition = "TEXT")
+    private String rtspUrl;
+
+    @Column(name = "status", length = 16)
+    @Builder.Default
+    private String status = "UNKNOWN";
+
+    @Column(name = "is_active")
+    @Builder.Default
+    private Boolean isActive = true;
+
+    @Column(name = "status_updated_at")
+    private OffsetDateTime statusUpdatedAt;
 }

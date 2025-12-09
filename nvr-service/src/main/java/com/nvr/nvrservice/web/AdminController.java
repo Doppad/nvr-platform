@@ -1,12 +1,14 @@
 package com.nvr.nvrservice.web;
 
 import com.nvr.nvrservice.api.dto.AddressDto;
+import com.nvr.nvrservice.api.dto.ChannelDto;
 import com.nvr.nvrservice.api.dto.CreateAddressRequest;
 import com.nvr.nvrservice.api.dto.CreateDeviceReq;
 import com.nvr.nvrservice.api.dto.DeviceDto;
 import com.nvr.nvrservice.api.dto.UpdateDeviceReq;
 import com.nvr.nvrservice.service.AddressService;
 import com.nvr.nvrservice.service.NvrDeviceService;
+import com.nvr.nvrservice.service.NvrSyncService;
 import com.nvr.nvrservice.security.UserContext;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +21,8 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/admin/api")
 @RequiredArgsConstructor
@@ -26,6 +30,7 @@ public class AdminController {
 
     private final AddressService addressService;
     private final NvrDeviceService deviceService;
+    private final NvrSyncService syncService;
 
     // --- utils ---
     private Long getAdminUserId() {
@@ -138,6 +143,30 @@ public class AdminController {
         attachAdminUser(uid);
         deviceService.delete(uid, id);
         return ResponseEntity.ok("deleted");
+    }
+
+    // --------------------------------------------------------
+    // CHANNELS
+    // --------------------------------------------------------
+
+    @GetMapping("/devices/{id}/channels")
+    public ResponseEntity<?> getDeviceChannels(@PathVariable Long id) {
+        Long uid = getAdminUserId();
+        attachAdminUser(uid);
+        List<ChannelDto> channels = deviceService.getChannels(uid, id);
+        return ResponseEntity.ok(channels);
+    }
+
+    @PostMapping("/devices/{id}/sync")
+    public ResponseEntity<?> syncDeviceChannels(@PathVariable Long id) {
+        Long uid = getAdminUserId();
+        attachAdminUser(uid);
+        try {
+            syncService.syncDeviceChannels(id);
+            return ResponseEntity.ok("Synchronization started");
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("Sync failed: " + e.getMessage());
+        }
     }
 
     @DeleteMapping("/addresses/{id}")
