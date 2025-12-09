@@ -293,6 +293,16 @@ public class NvrDeviceService {
                     dto.setActive(isActive);
                     dto.setIsActive(isActive); // alias
                     
+                    // Вычисляем visible: канал видим, если он активен ИЛИ имеет нестандартное имя
+                    // Правила:
+                    // - Если канал ONLINE (active = true) → всегда видим
+                    // - Если канал OFFLINE (active = false) И имя = "Channel" + номер → скрываем (пустой канал)
+                    // - Если канал OFFLINE (active = false) И имя != "Channel" + номер → показываем (реальная камера, просто оффлайн)
+                    String channelName = camera.getName();
+                    boolean isDefaultName = channelName != null && channelName.matches("Channel\\d+");
+                    boolean visible = isActive || !isDefaultName;
+                    dto.setVisible(visible);
+                    
                     // Дополнительные поля
                     dto.setId(camera.getId());
                     dto.setStatus(camera.getStatus());

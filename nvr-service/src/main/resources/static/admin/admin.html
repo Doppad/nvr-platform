@@ -321,10 +321,14 @@
             
             grid.innerHTML = '';
             
-            // Сортируем каналы по номеру
-            channels.sort((a, b) => (a.channelNumber || a.channelNo || 0) - (b.channelNumber || b.channelNo || 0));
+            // Фильтруем каналы по visible (по умолчанию true для обратной совместимости)
+            const visibleChannels = channels.filter(ch => ch.visible !== undefined ? ch.visible : true);
+            const hiddenChannels = channels.filter(ch => ch.visible === false);
             
-            channels.forEach(channel => {
+            // Сортируем видимые каналы по номеру
+            visibleChannels.sort((a, b) => (a.channelNumber || a.channelNo || 0) - (b.channelNumber || b.channelNo || 0));
+            
+            visibleChannels.forEach(channel => {
                 const channelNumber = channel.channelNumber || channel.channelNo || 0;
                 const name = channel.name || `Channel${channelNumber}`;
                 const active = channel.active !== undefined ? channel.active : (channel.isActive !== undefined ? channel.isActive : false);
@@ -348,6 +352,36 @@
                 
                 grid.appendChild(card);
             });
+            
+            // Показываем подсказку о скрытых каналах, если есть
+            if (hiddenChannels.length > 0) {
+                // Удаляем предыдущую подсказку, если есть
+                const existingHint = grid.parentElement.querySelector('.hidden-channels-hint');
+                if (existingHint) {
+                    existingHint.remove();
+                }
+                
+                const hiddenNames = hiddenChannels
+                    .map(ch => ch.name || `Channel${ch.channelNumber || ch.channelNo || ''}`)
+                    .join(', ');
+                const hint = document.createElement('div');
+                hint.className = 'hint hidden-channels-hint';
+                hint.style.marginTop = '12px';
+                hint.style.fontSize = '12px';
+                hint.style.color = '#777';
+                hint.textContent = `Скрыто ${hiddenChannels.length} пустых каналов (${hiddenNames})`;
+                // Добавляем подсказку в контейнер сетки
+                const gridContainer = grid.parentElement;
+                if (gridContainer) {
+                    gridContainer.appendChild(hint);
+                }
+            } else {
+                // Удаляем подсказку, если скрытых каналов нет
+                const existingHint = grid.parentElement.querySelector('.hidden-channels-hint');
+                if (existingHint) {
+                    existingHint.remove();
+                }
+            }
         } catch (error) {
             console.error('Error loading channels:', error);
         }
@@ -409,11 +443,13 @@
 
                 // Для устройств Dahua 16ch показываем сетку 4x4
                 if (cams === 16 && d.vendor === 'Dahua') {
+                    const gridContainer = document.createElement('div');
                     const grid = document.createElement('div');
                     grid.className = 'channels-grid';
                     grid.id = `channels-grid-${d.id}`;
+                    gridContainer.appendChild(grid);
                     col.appendChild(wrapper);
-                    col.appendChild(grid);
+                    col.appendChild(gridContainer);
                     // Загружаем каналы через API
                     loadChannelsForDevice(d.id);
                 } else {

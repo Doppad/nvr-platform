@@ -15,6 +15,7 @@ public class ChannelDto {
     private String name;            // название канала
     private String rtspUrl;         // RTSP URL
     private Boolean active;         // активен ли канал (online/offline)
+    private Boolean visible;        // должен ли канал отображаться в UI (false для пустых каналов)
     
     // Дополнительные поля (опционально, для обратной совместимости)
     private Long id;
