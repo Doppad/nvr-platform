@@ -1,6 +1,8 @@
 package com.nvr.authservice.web;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nvr.authservice.service.BillingService;
+import com.nvr.authservice.service.TinkoffApiClient;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -10,6 +12,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.Map;
 
 @Slf4j
@@ -19,6 +22,8 @@ import java.util.Map;
 public class BillingController {
 
     private final BillingService billingService;
+    private final TinkoffApiClient tinkoffApiClient;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private Long currentUserIdOrThrow() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
@@ -87,8 +92,18 @@ public class BillingController {
             log.info("Received Tinkoff webhook: PaymentId={}, OrderId={}, Status={}, Success={}, ErrorCode={}",
                     req.paymentId, req.orderId, req.status, req.success, req.errorCode);
 
-            // Проверяем подпись (Token) от Тинькофф
-            // TODO: добавить проверку подписи для безопасности (проверить req.token)
+            // Проверяем подпись (Token) от Тинькофф для безопасности
+            // Преобразуем объект в Map, чтобы получить все поля (включая возможные дополнительные)
+            @SuppressWarnings("unchecked")
+            Map<String, Object> webhookData = objectMapper.convertValue(req, Map.class);
+            // Удаляем Token из данных для проверки подписи
+            webhookData.remove("token");
+
+            if (!tinkoffApiClient.verifyToken(webhookData, req.token)) {
+                log.error("Invalid token in Tinkoff webhook: PaymentId={}, OrderId={}", req.paymentId, req.orderId);
+                // Возвращаем 200 OK, чтобы Тинькофф не повторял запрос, но логируем ошибку
+                return ResponseEntity.ok(Map.of("status", "ERROR", "message", "Invalid token"));
+            }
 
             if (req.success != null && req.success && "CONFIRMED".equals(req.status)) {
                 billingService.handleSuccessfulPayment(req.paymentId, req.orderId);

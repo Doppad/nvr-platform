@@ -39,6 +39,7 @@ public class NvrDeviceService {
     private final AddressRepo addressRepo;
     private final NvrCameraRepo cameraRepo;
     private final CryptoService crypto;
+    private final NvrSyncService syncService;
 
     private DeviceDto toDto(NvrDevice dev) {
 
@@ -151,6 +152,7 @@ public class NvrDeviceService {
                 .name(req.getName())
                 .ip(req.getIp())
                 .port(req.getPort())
+                .httpPort(req.getHttpPort())    // HTTP порт для API запросов
                 .address(req.getAddress())      // legacy-строка, можно будет выпилить позже
                 .vendor(req.getVendor())
                 .timezone(timezone)
@@ -169,6 +171,35 @@ public class NvrDeviceService {
                         .passwordEnc(enc)
                         .build());
             }
+        } else {
+            // Предупреждение: устройство создано без пользователей, синхронизация не будет работать
+            log.warn("Device {} (id={}, ip={}) created without users. " +
+                    "Synchronization will be skipped until users are added. " +
+                    "Add at least one user with role 'user_admin' or 'user_default'.",
+                    dev.getName(), dev.getId(), dev.getIp());
+        }
+
+        // Запускаем синхронизацию каналов асинхронно для Dahua устройств
+        // Используем @TransactionalEventListener или просто запускаем после коммита транзакции
+        if ("Dahua".equalsIgnoreCase(dev.getVendor()) && 
+            (req.getUsers() != null && !req.getUsers().isEmpty())) {
+            Long deviceId = dev.getId();
+            log.info("Scheduling immediate sync for newly created Dahua device {} (id={})", 
+                    dev.getName(), deviceId);
+            // Запускаем синхронизацию в отдельном потоке после завершения транзакции
+            // Используем простой Thread, так как @Async требует дополнительной настройки
+            new Thread(() -> {
+                try {
+                    // Небольшая задержка, чтобы транзакция точно завершилась
+                    Thread.sleep(500);
+                    log.info("Starting sync for device {} (id={})", dev.getName(), deviceId);
+                    syncService.syncDeviceChannels(deviceId);
+                    log.info("Sync completed for device {} (id={})", dev.getName(), deviceId);
+                } catch (Exception e) {
+                    log.error("Failed to sync device {} (id={}): {}", 
+                            dev.getName(), deviceId, e.getMessage(), e);
+                }
+            }, "sync-device-" + deviceId).start();
         }
 
         // Собираем DeviceDto, как раньше
@@ -236,6 +267,7 @@ public class NvrDeviceService {
         if (req.getName() != null) device.setName(req.getName());
         if (req.getIp() != null) device.setIp(req.getIp());
         if (req.getPort() != null) device.setPort(req.getPort());
+        if (req.getHttpPort() != null) device.setHttpPort(req.getHttpPort());
         if (req.getAddress() != null) device.setAddress(req.getAddress());
         if (req.getVendor() != null) device.setVendor(req.getVendor());
         if (req.getCamerasCount() != null) device.setCamerasCount(req.getCamerasCount());
@@ -329,8 +361,24 @@ public class NvrDeviceService {
             device = repo.findByIdAndOwnerId(id, ctx.userId())
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
         }
-        deviceUsers.deleteByDeviceId(device.getId());
+        
+        Long deviceId = device.getId();
+        
+        // Удаляем камеры устройства
+        List<NvrCamera> cameras = cameraRepo.findByDeviceId(deviceId);
+        if (!cameras.isEmpty()) {
+            log.info("Deleting {} cameras for device {} (id={})", cameras.size(), device.getName(), deviceId);
+            cameraRepo.deleteAll(cameras);
+        }
+        
+        // Удаляем пользователей устройства
+        deviceUsers.deleteByDeviceId(deviceId);
+        
+        // Удаляем само устройство
         repo.delete(device);
+        
+        log.info("Successfully deleted device {} (id={}) with {} cameras", 
+                device.getName(), deviceId, cameras.size());
     }
 
     @Transactional(readOnly = true)

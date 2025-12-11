@@ -48,26 +48,54 @@ public class NvrSyncService {
      * Выполняется по расписанию (каждые 5 минут).
      */
     @Scheduled(fixedRate = 300000) // 5 минут
-    @Transactional
     public void syncAllDevices() {
         log.info("Starting synchronization of all Dahua devices");
 
-        List<NvrDevice> dahuaDevices = deviceRepo.findAll().stream()
-                .filter(device -> "Dahua".equalsIgnoreCase(device.getVendor()))
-                .collect(Collectors.toList());
+        // Читаем устройства в отдельной read-only транзакции, чтобы видеть актуальные данные
+        List<Long> dahuaDeviceIds = getDahuaDeviceIds();
+        
+        log.info("Found {} Dahua devices to sync", dahuaDeviceIds.size());
+        
+        // Логируем найденные Dahua устройства
+        for (Long deviceId : dahuaDeviceIds) {
+            log.info("Will sync Dahua device: id={}", deviceId);
+        }
 
-        log.info("Found {} Dahua devices to sync", dahuaDevices.size());
-
-        for (NvrDevice device : dahuaDevices) {
+        // Синхронизируем каждое устройство в отдельной транзакции
+        for (Long deviceId : dahuaDeviceIds) {
             try {
-                syncDeviceChannels(device);
+                syncDeviceChannels(deviceId);
             } catch (Exception e) {
-                log.error("Failed to sync channels for device {} ({}): {}",
-                        device.getId(), device.getName(), e.getMessage(), e);
+                log.error("Failed to sync channels for device {}: {}",
+                        deviceId, e.getMessage(), e);
             }
         }
 
         log.info("Finished synchronization of all Dahua devices");
+    }
+
+    /**
+     * Получает список ID всех устройств Dahua в read-only транзакции.
+     * Это гарантирует, что мы видим актуальные данные из БД.
+     */
+    @Transactional(readOnly = true)
+    public List<Long> getDahuaDeviceIds() {
+        List<NvrDevice> allDevices = deviceRepo.findAll();
+        log.info("Total devices in database: {}", allDevices.size());
+        
+        // Логируем все устройства для отладки
+        for (NvrDevice device : allDevices) {
+            log.info("Device in DB: id={}, name={}, vendor={}, ip={}", 
+                    device.getId(), device.getName(), 
+                    device.getVendor(), device.getIp());
+        }
+
+        List<Long> dahuaDeviceIds = allDevices.stream()
+                .filter(device -> "Dahua".equalsIgnoreCase(device.getVendor()))
+                .map(NvrDevice::getId)
+                .collect(Collectors.toList());
+
+        return dahuaDeviceIds;
     }
 
     /**
@@ -107,69 +135,77 @@ public class NvrSyncService {
         String username = user.getUsername();
         String password = cryptoService.decrypt(user.getPasswordEnc());
 
-        // Определяем HTTP порт (используем httpPort, если задан, иначе стандартный 80)
-        int httpPort = device.getHttpPort() != null ? device.getHttpPort() : 80;
+        // Определяем HTTP порт (используем httpPort, если задан, иначе используем port устройства)
+        int httpPort = device.getHttpPort() != null ? device.getHttpPort() : 
+                      (device.getPort() != null ? device.getPort() : 80);
         String baseUrl = String.format("http://%s:%d", device.getIp(), httpPort);
-
-        // Для устройств Dahua 16ch используем ChannelTitle
-        // Проверяем по vendor и количеству каналов, или по ID устройства (для конкретного устройства)
-        boolean isDahua16ch = "Dahua".equalsIgnoreCase(device.getVendor()) && 
-                               (device.getId() != null && device.getId() == 66 || 
-                                device.getCamerasCount() != null && device.getCamerasCount() >= 16);
         
-        if (isDahua16ch) {
-            // Получаем названия каналов из ChannelTitle
+        log.info("Using HTTP port {} for device {} (id={}, ip={}, httpPort from DB: {}, RTSP port: {})", 
+                httpPort, device.getName(), device.getId(), device.getIp(), 
+                device.getHttpPort(), device.getPort());
+
+        // Для всех устройств Dahua пытаемся использовать ChannelTitle (работает для 16-канальных устройств)
+        // Если ChannelTitle не работает, используем старый метод getChannels
+        if ("Dahua".equalsIgnoreCase(device.getVendor())) {
+            // Сначала пытаемся получить каналы через ChannelTitle (для 16-канальных устройств)
             Map<Integer, String> channelTitles = dahuaApiClient.getChannelTitles(baseUrl, username, password);
             
-            if (channelTitles.isEmpty()) {
-                log.warn("Received empty channel titles from device {} (id={}, ip={}, httpPort={}). " +
-                        "Device may be offline or API endpoint returned error/HTML.",
-                        device.getName(), device.getId(), device.getIp(), httpPort);
-                return;
-            }
-            
-            log.info("Fetched {} channel titles from device {}", channelTitles.size(), device.getId());
-            
-            // Синхронизируем 16 каналов в БД
-            int updatedCount = syncChannelsFromTitles(device, channelTitles, username, password);
-            
-            // Обновляем количество камер в устройстве
-            device.setCamerasCount(16);
-            deviceRepo.save(device);
-            
-            log.info("Fetched 16 channels for device {}. Updated {} channels.", device.getId(), updatedCount);
-            
-            // Проверяем RTSP доступность для всех каналов
-            checkRtspHealthForDevice(device.getId());
-        } else {
-            // Старая логика для других устройств
-            List<DahuaChannelDto> channels = dahuaApiClient.getChannels(baseUrl, username, password);
-            
-            if (channels.isEmpty()) {
-                log.warn("Received empty channel list from device {} (id={}, ip={}, httpPort={}). " +
-                        "Device may be offline or API endpoint returned error/HTML.",
-                        device.getName(), device.getId(), device.getIp(), httpPort);
-                return;
-            }
-            
-            log.info("Fetched {} channels from device {}", channels.size(), device.getId());
-
-            // Получаем состояние камер (опционально, может вернуть пустую Map)
-            Map<Integer, String> cameraStates = dahuaApiClient.getCameraStates(baseUrl, username, password);
-            if (!cameraStates.isEmpty()) {
-                log.info("Fetched {} camera states from device {}", cameraStates.size(), device.getId());
+            if (!channelTitles.isEmpty() && channelTitles.size() >= 16) {
+                // Успешно получили ChannelTitle с достаточным количеством каналов
+                log.info("Fetched {} channel titles from device {} using ChannelTitle API", 
+                        channelTitles.size(), device.getId());
+                
+                // Синхронизируем каналы в БД
+                int updatedCount = syncChannelsFromTitles(device, channelTitles, username, password);
+                
+                // Обновляем количество камер в устройстве на основе реальных данных
+                int actualChannelsCount = channelTitles.size();
+                device.setCamerasCount(actualChannelsCount);
+                deviceRepo.save(device);
+                
+                log.info("Fetched {} channels for device {}. Updated {} channels.", 
+                        actualChannelsCount, device.getId(), updatedCount);
+                
+                // Проверяем RTSP доступность для всех каналов
+                checkRtspHealthForDevice(device.getId());
             } else {
-                log.debug("No camera states received from device {} (may be normal)", device.getId());
+                // ChannelTitle не вернул данные или вернул мало каналов - используем старый метод
+                log.info("ChannelTitle returned {} channels, trying getChannels API for device {}", 
+                        channelTitles.size(), device.getId());
+                
+                List<DahuaChannelDto> channels = dahuaApiClient.getChannels(baseUrl, username, password);
+                
+                if (channels.isEmpty()) {
+                    log.warn("Received empty channel list from device {} (id={}, ip={}, httpPort={}). " +
+                            "Device may be offline or API endpoint returned error/HTML.",
+                            device.getName(), device.getId(), device.getIp(), httpPort);
+                    return;
+                }
+                
+                log.info("Fetched {} channels from device {} using getChannels API", 
+                        channels.size(), device.getId());
+
+                // Получаем состояние камер (опционально, может вернуть пустую Map)
+                Map<Integer, String> cameraStates = dahuaApiClient.getCameraStates(baseUrl, username, password);
+                if (!cameraStates.isEmpty()) {
+                    log.info("Fetched {} camera states from device {}", cameraStates.size(), device.getId());
+                } else {
+                    log.debug("No camera states received from device {} (may be normal)", device.getId());
+                }
+
+                // Синхронизируем каналы в БД
+                syncChannelsToDatabase(device, channels, cameraStates, username, password);
+
+                // Обновляем количество камер в устройстве на основе реальных данных
+                device.setCamerasCount(channels.size());
+                deviceRepo.save(device);
+
+                log.info("Successfully synced {} channels for device {}", channels.size(), device.getId());
             }
-
-            // Синхронизируем каналы в БД
-            syncChannelsToDatabase(device, channels, cameraStates, username, password);
-
-            // Обновляем количество камер в устройстве
-            device.setCamerasCount(channels.size());
-            deviceRepo.save(device);
-
-            log.info("Successfully synced {} channels for device {}", channels.size(), device.getId());
+        } else {
+            // Для не-Dahua устройств используем старую логику
+            log.warn("Device {} (vendor={}) is not Dahua, skipping sync", 
+                    device.getName(), device.getVendor());
         }
     }
 

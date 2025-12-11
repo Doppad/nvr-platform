@@ -7,6 +7,7 @@ public class UpdateDeviceReq {
     private String name;
     private String ip;
     private Integer port;
+    private Integer httpPort; // HTTP порт для API запросов
     private String address;
     private String vendor;
     private String timezone;

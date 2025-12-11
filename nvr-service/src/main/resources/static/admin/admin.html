@@ -151,15 +151,12 @@
             <input type="text" name="ip" id="ipInput" placeholder="95.105.78.119" required>
 
             <label>Port</label>
-            <input type="number" name="port" value="5543" required>
+            <input type="number" name="port" value="8082" required>
+            <div class="hint">Порт для подключения (RTSP и HTTP используют один порт, обычно 8082 для Dahua)</div>
 
             <label>Vendor</label>
             <select name="vendor" id="vendorSelect">
-                <option value="Hikvision">Hikvision</option>
                 <option value="Dahua">Dahua</option>
-                <option value="Uniview">Uniview</option>
-                <option value="Ezviz">Ezviz</option>
-                <option value="">Другое / неизвестно</option>
             </select>
 
             <label>Адрес</label>
@@ -544,7 +541,7 @@
             name: form.name.value,
             ip: normalizeIp(form.ip.value) || '127.0.0.1',
             port: Number(form.port.value),
-            vendor: form.vendor.value || null,
+            vendor: form.vendor.value || 'Dahua',
             addressId: form.addressId.value ? Number(form.addressId.value) : null,
             timezone: form.timezone.value || null,
             camerasCount: form.camerasCount.value ? Number(form.camerasCount.value) : null,
@@ -556,8 +553,18 @@
             body: JSON.stringify(payload)
         });
         if (res.ok) {
-            document.getElementById('deviceMsg').textContent = 'NVR создан';
+            const deviceData = await res.json();
+            document.getElementById('deviceMsg').textContent = 'NVR создан. Синхронизация каналов запущена...';
+            form.reset();
             loadDevices();
+            
+            // Если это Dahua устройство, показываем сообщение о синхронизации
+            if (payload.vendor === 'Dahua' && payload.users && payload.users.length > 0) {
+                setTimeout(() => {
+                    document.getElementById('deviceMsg').textContent = 
+                        'NVR создан. Синхронизация каналов выполняется в фоне. Обновите страницу через несколько секунд.';
+                }, 1000);
+            }
         } else {
             const text = await res.text();
             document.getElementById('deviceMsg').textContent = 'Ошибка при создании NVR: ' + text;

@@ -186,6 +186,34 @@ public class TinkoffApiClient {
         }
     }
 
+    /**
+     * Проверяет подпись (Token) в webhook от Тинькофф.
+     * Алгоритм такой же, как при генерации: все поля кроме Token + Password, сортировка, конкатенация, SHA256.
+     *
+     * @param data данные из webhook (включая Token)
+     * @param receivedToken токен, полученный в webhook
+     * @return true, если подпись валидна
+     */
+    public boolean verifyToken(Map<String, Object> data, String receivedToken) {
+        if (receivedToken == null || receivedToken.isBlank()) {
+            log.warn("Received empty token in webhook");
+            return false;
+        }
+
+        // Создаем копию данных без Token
+        Map<String, Object> dataWithoutToken = new HashMap<>(data);
+        dataWithoutToken.remove("Token");
+
+        // Генерируем ожидаемый токен
+        String expectedToken = generateToken(dataWithoutToken);
+
+        boolean isValid = expectedToken.equalsIgnoreCase(receivedToken);
+        if (!isValid) {
+            log.warn("Token verification failed: expected={}, received={}", expectedToken, receivedToken);
+        }
+        return isValid;
+    }
+
     private String bytesToHex(byte[] bytes) {
         StringBuilder result = new StringBuilder();
         for (byte b : bytes) {

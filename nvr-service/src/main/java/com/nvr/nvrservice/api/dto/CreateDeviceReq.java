@@ -18,6 +18,9 @@ public class CreateDeviceReq {
 
     @Min(1) @Max(65535) private int port = 554;
 
+    @Min(1) @Max(65535)
+    private Integer httpPort; // HTTP порт для API запросов (обычно 80 или 8080-8082)
+
     @Size(max = 512) private String address;
     @Size(max = 64)  private String vendor;
 

@@ -24,7 +24,9 @@ public class SecurityConfig {
         http.csrf(csrf -> csrf.disable());      // CSRF нужен для браузерных форм при cookie-сессиях. В API на JWT чаще всего стейтлесс (без сессий), и CSRF не нужен -> отключаем
         http.authorizeHttpRequests(reg -> reg
                 .requestMatchers("/auth/otp/**", "/auth/token/refresh", "/actuator/**").permitAll()
-                .requestMatchers("/auth/me", "/billing/**").authenticated()
+                .requestMatchers("/billing/webhook/tinkoff").permitAll() // Webhook от Тинькофф должен быть доступен без аутентификации
+                .requestMatchers("/billing/plans").permitAll() // Список планов доступен публично для просмотра цен
+                .requestMatchers("/auth/me", "/billing/**").authenticated() // Остальные billing endpoints требуют аутентификации
                 .anyRequest().authenticated()
         );
         http.httpBasic(Customizer.withDefaults()); // временно можно оставить
