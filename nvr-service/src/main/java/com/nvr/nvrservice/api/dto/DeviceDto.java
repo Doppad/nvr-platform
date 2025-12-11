@@ -11,6 +11,7 @@ public class DeviceDto {
     String name;
     String ip;
     Integer port;
+    Integer httpPort; // HTTP порт для API запросов
     String vendor;
     String timezone;
     OffsetDateTime createdAt;

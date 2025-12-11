@@ -325,11 +325,26 @@
             // Сортируем видимые каналы по номеру
             visibleChannels.sort((a, b) => (a.channelNumber || a.channelNo || 0) - (b.channelNumber || b.channelNo || 0));
             
+            // Получаем информацию об устройстве для формирования URL скриншота
+            const device = window.__devicesCache?.find(d => d.id === deviceId);
+            const deviceIp = device?.ip || '';
+            // Используем HTTP порт, если есть, иначе используем port (который теперь 8082 для Dahua)
+            const httpPort = device?.httpPort || device?.port || 8082;
+            const viewerLogin = device?.viewerLogin || '';
+            const viewerPassword = device?.viewerPassword || '';
+            
             visibleChannels.forEach(channel => {
                 const channelNumber = channel.channelNumber || channel.channelNo || 0;
                 const name = channel.name || `Channel${channelNumber}`;
                 const active = channel.active !== undefined ? channel.active : (channel.isActive !== undefined ? channel.isActive : false);
                 const rtspUrl = channel.rtspUrl || '';
+                
+                // Формируем URL для скриншота Dahua
+                // Формат: http://{ip}:{httpPort}/cgi-bin/snapshot.cgi?channel={channelNo}
+                // Для аутентификации используем Basic Auth через URL: http://user:pass@ip:port/...
+                const snapshotUrl = deviceIp && viewerLogin && viewerPassword
+                    ? `http://${encodeURIComponent(viewerLogin)}:${encodeURIComponent(viewerPassword)}@${deviceIp}:${httpPort}/cgi-bin/snapshot.cgi?channel=${channelNumber}`
+                    : '';
                 
                 const card = document.createElement('div');
                 card.className = `channel-card ${active ? 'active' : 'inactive'}`;
@@ -344,7 +359,8 @@
                         <span class="status-dot ${statusDot}"></span>
                         <span>${statusText}</span>
                     </div>
-                    ${rtspUrl ? `<button type="button" class="btn-link" onclick="window.open('${rtspUrl}', '_blank')">Открыть RTSP</button>` : ''}
+                    ${snapshotUrl ? `<button type="button" class="btn-link" onclick="window.open('${snapshotUrl}', '_blank')" style="margin: 4px 0; display: block;">Просмотр скрина</button>` : ''}
+                    ${rtspUrl ? `<button type="button" class="btn-link" onclick="window.open('${rtspUrl}', '_blank')" style="margin: 4px 0; display: block;">Открыть RTSP</button>` : ''}
                 `;
                 
                 grid.appendChild(card);
@@ -438,8 +454,8 @@
                 wrapper.className = 'hint';
                 wrapper.textContent = 'Каналы:';
 
-                // Для устройств Dahua 16ch показываем сетку 4x4
-                if (cams === 16 && d.vendor === 'Dahua') {
+                // Для всех устройств Dahua показываем сетку с загрузкой каналов через API
+                if (d.vendor === 'Dahua' && cams > 0) {
                     const gridContainer = document.createElement('div');
                     const grid = document.createElement('div');
                     grid.className = 'channels-grid';

@@ -71,6 +71,7 @@ public class NvrDeviceService {
                 dev.getName(),
                 dev.getIp(),
                 dev.getPort(),
+                dev.getHttpPort(), // HTTP порт для API запросов
                 dev.getVendor(),
                 dev.getTimezone(),
                 dev.getCreatedAt(),
