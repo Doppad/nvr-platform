@@ -34,6 +34,19 @@ public class SubscriptionPlan {
     @Column(name = "is_addon", nullable = false)
     private boolean addon; // план-расширение (CAM_1, CAM_3) или базовый (FREE)
 
+    /**
+     * Цена в минимальных единицах (копейки/тиыны).
+     * null для бесплатных планов.
+     */
+    @Column(name = "price_minor")
+    private Long priceMinor;
+
+    /**
+     * Валюта (RUB, KZT, USD и т.д.).
+     */
+    @Column(length = 8)
+    private String currency;
+
     @Column(name = "created_at", nullable = false, updatable = false,
             columnDefinition = "TIMESTAMPTZ NOT NULL DEFAULT now()")
     private Instant createdAt;

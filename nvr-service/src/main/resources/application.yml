@@ -9,6 +9,12 @@ spring:
     url: jdbc:postgresql://89.23.102.97:5432/oko_api?sslmode=prefer
     username: oko_user
     password: Mx@:.s7T@#YUrg
+    hikari:
+      maximum-pool-size: 30
+      minimum-idle: 10
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
   jpa:
     hibernate:
       ddl-auto: update
@@ -31,3 +37,7 @@ app:
     level:
       org.springframework.security: DEBUG
       com.nvr.nvrservice.security: DEBUG
+      org.hibernate: INFO
+      org.springframework.context: INFO
+      org.springframework.beans: INFO
+      org.springframework.boot: INFO

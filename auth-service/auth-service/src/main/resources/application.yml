@@ -24,3 +24,9 @@ app:
     enabled: ${APP_TELEGRAM_ENABLED:false}
     bot-token: ${APP_TELEGRAM_BOT_TOKEN:}
     chat-id: ${APP_TELEGRAM_CHAT_ID:}
+  tinkoff:
+    terminal-key: ${APP_TINKOFF_TERMINAL_KEY:1764771769246DEMO}
+    password: ${APP_TINKOFF_PASSWORD:evjMB_tTiMh8rm9P}
+  billing:
+    success-url: ${APP_BILLING_SUCCESS_URL:https://example.com/payment/success}
+    fail-url: ${APP_BILLING_FAIL_URL:https://example.com/payment/fail}
