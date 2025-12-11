@@ -31,4 +31,18 @@ public interface UserSubscriptionRepository extends JpaRepository<UserSubscripti
             AppUser user,
             Instant now
     );
+    
+    // Метод с fetch join для загрузки планов
+    @Query("""
+        select us from UserSubscription us
+        join fetch us.plan p
+        where us.user = :user
+          and us.active = true
+          and us.endsAt > :now
+        order by us.endsAt desc
+        """)
+    List<UserSubscription> findByUserAndActiveIsTrueAndEndsAtAfterWithPlan(
+            @Param("user") AppUser user,
+            @Param("now") Instant now
+    );
 }
