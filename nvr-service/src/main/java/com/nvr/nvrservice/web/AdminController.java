@@ -68,7 +68,7 @@ public class AdminController {
         attachAdminUser(uid);
         var result = addressService.getForOwner(uid).stream()
                 .map(a -> new AddressDto(
-                        a.getId(),
+                        String.format("%06d", a.getId()),
                         a.getLabel(),
                         a.getCity(),
                         a.getStreet(),
@@ -96,7 +96,7 @@ public class AdminController {
                 )
         );
         return ResponseEntity.ok(new AddressDto(
-                a.getId(),
+                String.format("%06d", a.getId()),
                 a.getLabel(),
                 a.getCity(),
                 a.getStreet(),

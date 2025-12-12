@@ -25,7 +25,7 @@ public class AddressController {
         List<Address> addresses = service.getForOwner(ownerId);     // бизнес-логика в сервисе
         return addresses.stream()       // превращаю сущности в DTO
                 .map(a -> new AddressDto(
-                        a.getId(),
+                        String.format("%06d", a.getId()),
                         a.getLabel(),
                         a.getCity(),
                         a.getStreet(),
@@ -42,7 +42,7 @@ public class AddressController {
         Long ownerId = currentUserId();             // опять userId из токена
         Address a = service.create(ownerId, req);   // бизнес-логика = сервис
         return new AddressDto(                      // отдаю DTO наружу
-                a.getId(),
+                String.format("%06d", a.getId()),
                 a.getLabel(),
                 a.getCity(),
                 a.getStreet(),

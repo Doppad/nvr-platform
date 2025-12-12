@@ -1,7 +1,7 @@
 package com.nvr.nvrservice.api.dto;
 
 public record AddressDto(
-        Long id,
+        String id,
         String label,
         String city,
         String street,

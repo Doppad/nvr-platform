@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>NVR Admin</title>
+    <title>Око Монитор</title>
     <style>
         body { font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; padding: 20px; background: #f5f5f5; }
         h1, h2 { margin-bottom: 10px; }
@@ -109,7 +109,7 @@
     </style>
 </head>
 <body>
-<h1>NVR Admin Panel</h1>
+<h1>Око Монитор</h1>
 <p class="hint">
     Демонстрационная панель | <a href="/admin/channels.html">Управление каналами</a>
 </p>
@@ -275,7 +275,9 @@
                 tbody.appendChild(tr);
 
                 const opt = document.createElement('option');
-                opt.value = a.id;
+                // Преобразуем форматированный ID обратно в число для value
+                const numericId = parseInt(a.id, 10);
+                opt.value = numericId;
                 opt.textContent = `${a.id} — ${a.label || 'без названия'}`;
                 select.appendChild(opt);
             });
@@ -520,8 +522,10 @@
         const btn = e.target.closest('button[data-delete-address-id]');
         if (!btn) return;
         const id = btn.getAttribute('data-delete-address-id');
+        // Преобразуем форматированный ID (строка "000001") обратно в число для API
+        const numericId = parseInt(id, 10);
         if (!confirm(`Удалить адрес #${id}?`)) return;
-        const res = await fetch(`${base}/admin/api/addresses/${id}`, {
+        const res = await fetch(`${base}/admin/api/addresses/${numericId}`, {
             method: 'DELETE',
             headers: getAdminHeaders()
         });
