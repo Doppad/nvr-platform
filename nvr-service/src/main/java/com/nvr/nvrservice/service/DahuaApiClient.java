@@ -339,7 +339,7 @@ public class DahuaApiClient {
                 int channelIndex = Integer.parseInt(matcher.group(1));
                 String channelName = matcher.group(2);
                 
-                // Индекс + 1 = номер канала (1..16)
+                // Индекс + 1 = номер канала (может быть любое количество)
                 int channelNumber = channelIndex + 1;
                 titles.put(channelNumber, channelName);
             }

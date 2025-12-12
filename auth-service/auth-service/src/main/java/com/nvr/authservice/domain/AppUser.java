@@ -22,6 +22,9 @@ public class AppUser { // таблица юзеров
     @Column(unique = true)
     private String phone;
 
+    @Column(name = "full_name")
+    private String fullName; // ФИО пользователя
+
     private String passHash; // на будущее (пока не юзаю)
     @Builder.Default
     @Column(nullable = false)

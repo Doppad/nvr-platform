@@ -1,5 +1,6 @@
 package com.nvr.nvrservice.service;
 
+import com.nvr.nvrservice.api.dto.AddressDto;
 import com.nvr.nvrservice.api.dto.ChannelDto;
 import com.nvr.nvrservice.api.dto.CreateDeviceReq;
 import com.nvr.nvrservice.api.dto.DeviceDto;
@@ -53,13 +54,19 @@ public class NvrDeviceService {
 
         int camerasCount = dev.getCamerasCount() != null ? dev.getCamerasCount() : 0;
 
-        // Новый блок: адрес
-        Long addressId = null;
-        String addressLabel = null;
-
+        // Новый блок: адрес - полный объект
+        AddressDto address = null;
         if (dev.getAddressEntity() != null) {
-            addressId = dev.getAddressEntity().getId();
-            addressLabel = dev.getAddressEntity().getLabel();
+            var addr = dev.getAddressEntity();
+            address = new AddressDto(
+                    String.format("%06d", addr.getId()),
+                    addr.getLabel(),
+                    addr.getCity(),
+                    addr.getStreet(),
+                    addr.getHouse(),
+                    addr.getApartment(),
+                    addr.getComment()
+            );
         }
 
         // Простейшая проверка доступности IP:порта.
@@ -80,8 +87,7 @@ public class NvrDeviceService {
                 viewer.getUsername(),
                 decryptedPass,
 
-                addressId,
-                addressLabel,
+                address,
                 status
         );
     }

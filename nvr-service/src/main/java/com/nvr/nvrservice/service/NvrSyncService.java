@@ -144,13 +144,18 @@ public class NvrSyncService {
                 httpPort, device.getName(), device.getId(), device.getIp(), 
                 device.getHttpPort(), device.getPort());
 
-        // Для всех устройств Dahua пытаемся использовать ChannelTitle (работает для 16-канальных устройств)
+        // Для всех устройств Dahua пытаемся использовать ChannelTitle
         // Если ChannelTitle не работает, используем старый метод getChannels
         if ("Dahua".equalsIgnoreCase(device.getVendor())) {
-            // Сначала пытаемся получить каналы через ChannelTitle (для 16-канальных устройств)
+            // Сначала пытаемся получить каналы через ChannelTitle
             Map<Integer, String> channelTitles = dahuaApiClient.getChannelTitles(baseUrl, username, password);
             
-            if (!channelTitles.isEmpty() && channelTitles.size() >= 16) {
+            // Проверяем, что ChannelTitle вернул достаточно каналов
+            // Если camerasCount задан и ChannelTitle вернул меньше каналов, используем getChannels
+            boolean useChannelTitles = !channelTitles.isEmpty() && 
+                    (device.getCamerasCount() == null || channelTitles.size() >= device.getCamerasCount());
+            
+            if (useChannelTitles) {
                 // Успешно получили ChannelTitle с достаточным количеством каналов
                 log.info("Fetched {} channel titles from device {} using ChannelTitle API", 
                         channelTitles.size(), device.getId());
@@ -300,7 +305,7 @@ public class NvrSyncService {
     }
 
     /**
-     * Синхронизирует 16 каналов из ChannelTitle для устройства Dahua 16ch.
+     * Синхронизирует каналы из ChannelTitle для устройства Dahua.
      * 
      * @param device устройство
      * @param channelTitles Map номер канала -> название
@@ -323,9 +328,10 @@ public class NvrSyncService {
         int rtspPort = device.getPort() != null ? device.getPort() : 554;
         int updatedCount = 0;
 
-        // Создаём/обновляем все 16 каналов
-        for (int channelNumber = 1; channelNumber <= 16; channelNumber++) {
-            String channelName = channelTitles.getOrDefault(channelNumber, "Channel" + channelNumber);
+        // Создаём/обновляем все каналы из channelTitles (может быть любое количество)
+        for (Map.Entry<Integer, String> entry : channelTitles.entrySet()) {
+            int channelNumber = entry.getKey();
+            String channelName = entry.getValue();
             
             // Формируем RTSP URL: rtsp://{login}:{password}@{ip}:{rtspPort}/cam/realmonitor?channel={N}&subtype=1
             String rtspUrl = String.format("rtsp://%s:%s@%s:%d/cam/realmonitor?channel=%d&subtype=1",
