@@ -88,14 +88,14 @@ public class AuthService {
 
 
     private AppUser findOrCreate(String emailOrPhone) {
-        boolean isEmail = emailOrPhone.contains("@");
-        return (isEmail
-                ? userRepo.findByEmail(emailOrPhone)
-                : userRepo.findByPhone(emailOrPhone))
+        // Поддержка только телефона (email убран)
+        // Если передан email - все равно считаем это телефоном
+        String phone = emailOrPhone;
+        return userRepo.findByPhone(phone)
                 .orElseGet(() -> userRepo.save(
                         AppUser.builder()
-                                .email(isEmail ? emailOrPhone : null)
-                                .phone(isEmail ? null : emailOrPhone)
+                                .phone(phone)
+                                .email(null) // email не используется
                                 .build()
                 ));
     }

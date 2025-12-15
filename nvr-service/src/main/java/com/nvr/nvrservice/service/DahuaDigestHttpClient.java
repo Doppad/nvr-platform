@@ -89,13 +89,10 @@ public class DahuaDigestHttpClient {
         } catch (URISyntaxException e) {
             throw new IOException("Invalid URI in request", e);
         }
-        log.debug("Executing request: {} {}", request.getMethod(), requestUri);
 
         try (CloseableHttpResponse response = httpClient.execute((HttpUriRequestBase) request)) {
             int statusCode = response.getCode();
             String body = new String(response.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-
-            log.debug("Response status: {}, body preview: {}", statusCode, truncate(body, 300));
 
             // Если успешный ответ (2xx) - возвращаем тело
             if (statusCode >= 200 && statusCode < 300) {
@@ -107,7 +104,6 @@ public class DahuaDigestHttpClient {
                 Header authHeader = response.getFirstHeader(HttpHeaders.WWW_AUTHENTICATE);
                 if (authHeader != null && authHeader.getValue().startsWith("Digest")) {
                     String authHeaderValue = authHeader.getValue();
-                    log.debug("Received WWW-Authenticate: {}", authHeaderValue);
 
                     Map<String, String> digestParams = parseDigestHeader(authHeaderValue);
                     String realm = digestParams.get("realm");
@@ -155,7 +151,6 @@ public class DahuaDigestHttpClient {
                     }
 
                     String authorizationHeader = authHeaderBuilder.toString();
-                    log.debug("Authorization header: {}", authorizationHeader);
 
                     // Повторяем запрос с заголовком Authorization
                     ClassicHttpRequest authenticatedRequest = createAuthenticatedRequest(
@@ -169,9 +164,6 @@ public class DahuaDigestHttpClient {
                                 authResponse.getEntity().getContent().readAllBytes(),
                                 StandardCharsets.UTF_8
                         );
-
-                        log.debug("Authenticated response status: {}, body preview: {}",
-                                authStatusCode, truncate(authBody, 300));
 
                         if (authStatusCode >= 200 && authStatusCode < 300) {
                             return authBody;

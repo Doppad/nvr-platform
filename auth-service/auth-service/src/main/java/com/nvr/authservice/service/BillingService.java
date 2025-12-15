@@ -30,11 +30,8 @@ public class BillingService {
     private final SubscriptionPlanRepository planRepo;
     private final UserSubscriptionRepository subscriptionRepo;
 
-    @Value("${app.billing.success-url:https://example.com/payment/success}")
-    private String successUrl;
-
-    @Value("${app.billing.fail-url:https://example.com/payment/fail}")
-    private String failUrl;
+    @Value("${app.billing.public-base-url:https://pay.okodoma.com}")
+    private String publicBaseUrl;
 
     /**
      * Получает список доступных планов для покупки.
@@ -107,12 +104,18 @@ public class BillingService {
         // Создаем описание платежа
         String description = String.format("Подписка %s (%s)", plan.getTitle(), planCode);
 
+        // Формируем URL для редиректа после оплаты
+        // Используем orderId в URL, а на landing page найдем paymentId по orderId из БД
+        // Tinkoff поддерживает подстановку {PaymentId}, но для надежности используем orderId
+        String successUrl = publicBaseUrl + "/billing/redirect/success?orderId=" + orderId;
+        String failUrl = publicBaseUrl + "/billing/redirect/fail?orderId=" + orderId;
+
         // Вызываем API Тинькофф для создания платежа
         TinkoffApiClient.TinkoffInitResponse response = tinkoffApiClient.initPayment(
                 amountMinor,
                 orderId,
-                successUrl + "?orderId=" + orderId,
-                failUrl + "?orderId=" + orderId,
+                successUrl,
+                failUrl,
                 description
         );
 
@@ -205,6 +208,40 @@ public class BillingService {
         paymentAttemptRepo.save(attempt);
 
         log.info("Marked payment as failed: PaymentId={}, OrderId={}", paymentId, orderId);
+    }
+
+    /**
+     * Подтверждает платеж и активирует подписку без webhook.
+     * Используется как fallback, когда webhook не приходит.
+     *
+     * @param userId ID пользователя (для проверки владельца платежа)
+     * @param paymentId идентификатор платежа в системе Тинькофф
+     */
+    @Transactional
+    public void confirmPayment(Long userId, String paymentId) {
+        // Находим попытку платежа по paymentId
+        PaymentAttempt attempt = paymentAttemptRepo.findByProviderSessionId(paymentId)
+                .orElseThrow(() -> new IllegalArgumentException("Payment attempt not found: " + paymentId));
+
+        // Проверяем, что платеж принадлежит пользователю
+        if (!attempt.getUser().getId().equals(userId)) {
+            throw new IllegalArgumentException("Payment does not belong to user");
+        }
+
+        // Если уже обработан, просто возвращаемся
+        if (!"PENDING".equals(attempt.getStatus())) {
+            log.info("Payment {} already processed with status {}", paymentId, attempt.getStatus());
+            return;
+        }
+
+        // Проверяем статус в Тинькофф
+        TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentId);
+        if (!"CONFIRMED".equals(state.status())) {
+            throw new IllegalArgumentException("Payment status is not CONFIRMED: " + state.status());
+        }
+
+        // Обрабатываем успешный платеж (создает подписку)
+        handleSuccessfulPayment(paymentId, null);
     }
 
     /**

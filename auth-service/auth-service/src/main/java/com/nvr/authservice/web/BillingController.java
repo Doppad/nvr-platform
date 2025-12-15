@@ -126,6 +126,30 @@ public class BillingController {
         }
     }
 
+    /**
+     * Подтверждает платеж и активирует подписку без webhook.
+     * Используется как fallback, когда webhook не приходит.
+     *
+     * @param req запрос с paymentId
+     * @return статус подтверждения
+     */
+    @PostMapping("/confirm")
+    public ResponseEntity<?> confirmPayment(@RequestBody ConfirmPaymentRequest req) {
+        Long userId = currentUserIdOrThrow();
+
+        try {
+            billingService.confirmPayment(userId, req.paymentId);
+            return ResponseEntity.ok(Map.of("status", "OK", "message", "Payment confirmed and subscription activated"));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("status", "ERROR", "message", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Error confirming payment: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("status", "ERROR", "message", "Internal error"));
+        }
+    }
+
     @Data
     public static class CreateSessionRequest {
         /**
@@ -133,6 +157,14 @@ public class BillingController {
          * Цена берется из БД автоматически - безопасно!
          */
         private String planCode;
+    }
+
+    /**
+     * DTO для подтверждения платежа.
+     */
+    @Data
+    public static class ConfirmPaymentRequest {
+        private String paymentId;
     }
 
     /**

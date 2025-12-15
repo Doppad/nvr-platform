@@ -55,11 +55,6 @@ public class NvrSyncService {
         List<Long> dahuaDeviceIds = getDahuaDeviceIds();
         
         log.info("Found {} Dahua devices to sync", dahuaDeviceIds.size());
-        
-        // Логируем найденные Dahua устройства
-        for (Long deviceId : dahuaDeviceIds) {
-            log.info("Will sync Dahua device: id={}", deviceId);
-        }
 
         // Синхронизируем каждое устройство в отдельной транзакции
         for (Long deviceId : dahuaDeviceIds) {
@@ -81,15 +76,7 @@ public class NvrSyncService {
     @Transactional(readOnly = true)
     public List<Long> getDahuaDeviceIds() {
         List<NvrDevice> allDevices = deviceRepo.findAll();
-        log.info("Total devices in database: {}", allDevices.size());
         
-        // Логируем все устройства для отладки
-        for (NvrDevice device : allDevices) {
-            log.info("Device in DB: id={}, name={}, vendor={}, ip={}", 
-                    device.getId(), device.getName(), 
-                    device.getVendor(), device.getIp());
-        }
-
         List<Long> dahuaDeviceIds = allDevices.stream()
                 .filter(device -> "Dahua".equalsIgnoreCase(device.getVendor()))
                 .map(NvrDevice::getId)
@@ -118,7 +105,7 @@ public class NvrSyncService {
      */
     @Transactional
     public void syncDeviceChannels(NvrDevice device) {
-        log.info("Syncing channels for device {} ({}: {})", device.getId(), device.getName(), device.getIp());
+        log.debug("Syncing channels for device {} ({}: {})", device.getId(), device.getName(), device.getIp());
 
         // Получаем учётные данные администратора (обычно роль "user_admin" или "user_default")
         Optional<NvrDeviceUser> adminUser = deviceUserRepo.findByDeviceIdAndRole(device.getId(), "user_admin");
@@ -139,10 +126,6 @@ public class NvrSyncService {
         int httpPort = device.getHttpPort() != null ? device.getHttpPort() : 
                       (device.getPort() != null ? device.getPort() : 80);
         String baseUrl = String.format("http://%s:%d", device.getIp(), httpPort);
-        
-        log.info("Using HTTP port {} for device {} (id={}, ip={}, httpPort from DB: {}, RTSP port: {})", 
-                httpPort, device.getName(), device.getId(), device.getIp(), 
-                device.getHttpPort(), device.getPort());
 
         // Для всех устройств Dahua пытаемся использовать ChannelTitle
         // Если ChannelTitle не работает, используем старый метод getChannels
@@ -157,7 +140,7 @@ public class NvrSyncService {
             
             if (useChannelTitles) {
                 // Успешно получили ChannelTitle с достаточным количеством каналов
-                log.info("Fetched {} channel titles from device {} using ChannelTitle API", 
+                log.debug("Fetched {} channel titles from device {} using ChannelTitle API", 
                         channelTitles.size(), device.getId());
                 
                 // Синхронизируем каналы в БД
@@ -168,14 +151,14 @@ public class NvrSyncService {
                 device.setCamerasCount(actualChannelsCount);
                 deviceRepo.save(device);
                 
-                log.info("Fetched {} channels for device {}. Updated {} channels.", 
+                log.debug("Synced {} channels for device {}. Updated {} channels.", 
                         actualChannelsCount, device.getId(), updatedCount);
                 
                 // Проверяем RTSP доступность для всех каналов
                 checkRtspHealthForDevice(device.getId());
             } else {
                 // ChannelTitle не вернул данные или вернул мало каналов - используем старый метод
-                log.info("ChannelTitle returned {} channels, trying getChannels API for device {}", 
+                log.debug("ChannelTitle returned {} channels, trying getChannels API for device {}", 
                         channelTitles.size(), device.getId());
                 
                 List<DahuaChannelDto> channels = dahuaApiClient.getChannels(baseUrl, username, password);
@@ -187,16 +170,12 @@ public class NvrSyncService {
                     return;
                 }
                 
-                log.info("Fetched {} channels from device {} using getChannels API", 
+                log.debug("Fetched {} channels from device {} using getChannels API", 
                         channels.size(), device.getId());
 
                 // Получаем состояние камер (опционально, может вернуть пустую Map)
                 Map<Integer, String> cameraStates = dahuaApiClient.getCameraStates(baseUrl, username, password);
-                if (!cameraStates.isEmpty()) {
-                    log.info("Fetched {} camera states from device {}", cameraStates.size(), device.getId());
-                } else {
-                    log.debug("No camera states received from device {} (may be normal)", device.getId());
-                }
+                log.debug("Fetched {} camera states from device {}", cameraStates.size(), device.getId());
 
                 // Синхронизируем каналы в БД
                 syncChannelsToDatabase(device, channels, cameraStates, username, password);
@@ -205,7 +184,7 @@ public class NvrSyncService {
                 device.setCamerasCount(channels.size());
                 deviceRepo.save(device);
 
-                log.info("Successfully synced {} channels for device {}", channels.size(), device.getId());
+                log.debug("Successfully synced {} channels for device {}", channels.size(), device.getId());
             }
         } else {
             // Для не-Dahua устройств используем старую логику
@@ -397,7 +376,7 @@ public class NvrSyncService {
             return;
         }
         
-        log.info("Starting RTSP health check for device {} ({} channels)", deviceId, channels.size());
+        log.debug("Starting RTSP health check for device {} ({} channels)", deviceId, channels.size());
         
         // Создаём асинхронные задачи для проверки каждого канала
         List<CompletableFuture<Void>> futures = channels.stream()
@@ -428,7 +407,7 @@ public class NvrSyncService {
                 .filter(c -> Boolean.TRUE.equals(c.getIsActive()))
                 .count();
         
-        log.info("RTSP health check for device {}: {} online / {} total",
+        log.debug("RTSP health check for device {}: {} online / {} total",
                 deviceId, onlineCount, channels.size());
     }
 

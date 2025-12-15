@@ -191,7 +191,7 @@ public class NvrDeviceService {
         if ("Dahua".equalsIgnoreCase(dev.getVendor()) && 
             (req.getUsers() != null && !req.getUsers().isEmpty())) {
             Long deviceId = dev.getId();
-            log.info("Scheduling immediate sync for newly created Dahua device {} (id={})", 
+            log.debug("Scheduling immediate sync for newly created Dahua device {} (id={})", 
                     dev.getName(), deviceId);
             // Запускаем синхронизацию в отдельном потоке после завершения транзакции
             // Используем простой Thread, так как @Async требует дополнительной настройки
@@ -199,9 +199,9 @@ public class NvrDeviceService {
                 try {
                     // Небольшая задержка, чтобы транзакция точно завершилась
                     Thread.sleep(500);
-                    log.info("Starting sync for device {} (id={})", dev.getName(), deviceId);
+                    log.debug("Starting sync for device {} (id={})", dev.getName(), deviceId);
                     syncService.syncDeviceChannels(deviceId);
-                    log.info("Sync completed for device {} (id={})", dev.getName(), deviceId);
+                    log.debug("Sync completed for device {} (id={})", dev.getName(), deviceId);
                 } catch (Exception e) {
                     log.error("Failed to sync device {} (id={}): {}", 
                             dev.getName(), deviceId, e.getMessage(), e);
@@ -374,7 +374,6 @@ public class NvrDeviceService {
         // Удаляем камеры устройства
         List<NvrCamera> cameras = cameraRepo.findByDeviceId(deviceId);
         if (!cameras.isEmpty()) {
-            log.info("Deleting {} cameras for device {} (id={})", cameras.size(), device.getName(), deviceId);
             cameraRepo.deleteAll(cameras);
         }
         
@@ -383,9 +382,6 @@ public class NvrDeviceService {
         
         // Удаляем само устройство
         repo.delete(device);
-        
-        log.info("Successfully deleted device {} (id={}) with {} cameras", 
-                device.getName(), deviceId, cameras.size());
     }
 
     @Transactional(readOnly = true)

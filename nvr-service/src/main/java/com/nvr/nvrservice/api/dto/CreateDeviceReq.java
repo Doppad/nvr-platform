@@ -30,8 +30,7 @@ public class CreateDeviceReq {
     @Min(0)
     private Integer camerasCount;
 
-    // id адреса, к которому нужно привязать устройство
-    @NotNull
+    // id адреса, к которому нужно привязать устройство (опционально, можно добавить позже)
     private Long addressId;
     
     // Поддержка ввода 6-значного ID как строки ("000001") или числа (1)

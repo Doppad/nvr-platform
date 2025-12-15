@@ -42,7 +42,7 @@ public class RtspHealthChecker {
             grabber.start();
             
             // Если start() успешен, поток доступен
-            log.info("RTSP online for {}", maskPassword(rtspUrl));
+            log.debug("RTSP online for {}", maskPassword(rtspUrl));
             return true;
             
         } catch (Exception e) {

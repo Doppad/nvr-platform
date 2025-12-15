@@ -45,7 +45,6 @@ public class DahuaApiClient {
      */
     public Map<Integer, String> getChannelTitles(String baseUrl, String username, String password) {
         String endpoint = baseUrl + "/cgi-bin/configManager.cgi?action=getConfig&name=ChannelTitle";
-        log.info("Fetching channel titles from: {}", endpoint);
 
         try {
             URI uri;
@@ -94,7 +93,6 @@ public class DahuaApiClient {
      */
     public List<DahuaChannelDto> getChannels(String baseUrl, String username, String password) {
         String endpoint = baseUrl + "/cgi-bin/devVideoInput.cgi?action=getCollect";
-        log.info("Fetching channels from: {}", endpoint);
 
         try {
             URI uri;
@@ -152,7 +150,6 @@ public class DahuaApiClient {
      */
     public Map<Integer, String> getCameraStates(String baseUrl, String username, String password) {
         String endpoint = baseUrl + "/cgi-bin/api/LogicDeviceManager/getCameraState";
-        log.info("Fetching camera states from: {}", endpoint);
 
         String jsonBody = "{\"uniqueChannels\":[-1]}";
         try {
@@ -262,7 +259,7 @@ public class DahuaApiClient {
         // Сортируем по номеру канала
         channels.sort(Comparator.comparingInt(DahuaChannelDto::channelNo));
 
-        log.info("Parsed {} channels from INI response", channels.size());
+        log.debug("Parsed {} channels from INI response", channels.size());
         return channels;
     }
 
@@ -297,7 +294,7 @@ public class DahuaApiClient {
                 }
             }
 
-            log.info("Parsed {} camera states from JSON response", states.size());
+            log.debug("Parsed {} camera states from JSON response", states.size());
         } catch (Exception e) {
             log.error("Failed to parse camera states JSON: {}", e.getMessage(), e);
             // Fallback на regex парсинг, если JSON некорректный
@@ -345,7 +342,7 @@ public class DahuaApiClient {
             }
         }
 
-        log.info("Parsed {} channel titles from INI response", titles.size());
+        log.debug("Parsed {} channel titles from INI response", titles.size());
         return titles;
     }
 
