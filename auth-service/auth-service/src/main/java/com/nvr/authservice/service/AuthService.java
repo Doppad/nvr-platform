@@ -87,6 +87,63 @@ public class AuthService {
 
 
 
+    /**
+     * Регистрация нового пользователя.
+     *
+     * @param phone телефон (обязательный)
+     * @param firstName имя
+     * @param lastName фамилия
+     * @param middleName отчество
+     * @param addressId ID адреса (опциональный, можно привязать позже)
+     * @return данные зарегистрированного пользователя
+     */
+    @Transactional
+    public RegisterResponse register(String phone, String firstName, String lastName, String middleName, Long addressId) {
+        // Проверяем, не существует ли уже пользователь с таким телефоном
+        if (userRepo.findByPhone(phone).isPresent()) {
+            throw new IllegalArgumentException("User with phone " + phone + " already exists");
+        }
+
+        // Формируем fullName из частей
+        String fullName = buildFullName(firstName, lastName, middleName);
+
+        // Создаем пользователя
+        AppUser user = AppUser.builder()
+                .phone(phone)
+                .email(null) // email не используется
+                .fullName(fullName)
+                .build();
+
+        user = userRepo.save(user);
+
+        // addressId принимаем, но не обрабатываем сразу
+        // Адрес нужно привязывать позже через nvr-service после создания пользователя
+        // т.к. addressId относится к nvr-service и нужно проверить права на адрес
+
+        return new RegisterResponse(user.getId(), user.getPhone(), user.getFullName(), addressId);
+    }
+
+    /**
+     * Собирает fullName из firstName, lastName, middleName.
+     */
+    private String buildFullName(String firstName, String lastName, String middleName) {
+        StringBuilder sb = new StringBuilder();
+        
+        if (lastName != null && !lastName.isBlank()) {
+            sb.append(lastName);
+        }
+        if (firstName != null && !firstName.isBlank()) {
+            if (sb.length() > 0) sb.append(" ");
+            sb.append(firstName);
+        }
+        if (middleName != null && !middleName.isBlank()) {
+            if (sb.length() > 0) sb.append(" ");
+            sb.append(middleName);
+        }
+        
+        return sb.length() > 0 ? sb.toString() : null;
+    }
+
     private AppUser findOrCreate(String emailOrPhone) {
         // Поддержка только телефона (email убран)
         // Если передан email - все равно считаем это телефоном
@@ -99,4 +156,14 @@ public class AuthService {
                                 .build()
                 ));
     }
+
+    /**
+     * Ответ на регистрацию.
+     */
+    public record RegisterResponse(
+            Long userId,
+            String phone,
+            String fullName,
+            Long addressId  // возвращаем обратно, чтобы фронт знал что передал
+    ) {}
 }

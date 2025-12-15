@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.constraints.NotBlank;
 
 @RestController
 @RequestMapping("/auth")
@@ -44,9 +45,37 @@ public class AuthController {       // выдача токена
         return ResponseEntity.ok(tokens);
     }
 
+    /**
+     * Регистрация нового пользователя.
+     * Создает пользователя с телефоном и ФИО.
+     * addressId опциональный - можно привязать адрес позже.
+     */
+    @PostMapping("/register")
+    @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.CREATED)
+    public ResponseEntity<?> register(@jakarta.validation.Valid @RequestBody RegisterRequest req) {
+        var response = authService.register(
+                req.phone,
+                req.firstName,
+                req.lastName,
+                req.middleName,
+                req.addressId
+        );
+        return ResponseEntity.status(org.springframework.http.HttpStatus.CREATED).body(response);
+    }
+
     // ---- DTO ----
     @Data public static class OtpRequest { public String emailOrPhone; }
     @Data public static class OtpVerify { public String emailOrPhone; public String code; }
+    
+    @Data
+    public static class RegisterRequest {
+        @NotBlank
+        private String phone;
+        private String firstName;
+        private String lastName;
+        private String middleName;
+        private Long addressId; // опциональный, можно привязать адрес позже
+    }
 
     // старый класс JwtResp можно удалить, он больше не нужен
     // @Data public static class JwtResp { private final String jwt; }
