@@ -25,6 +25,13 @@ public class AppUser { // таблица юзеров
     @Column(name = "full_name")
     private String fullName; // ФИО пользователя
 
+    /**
+     * ID адреса из nvr-service, привязанного к пользователю.
+     * Может быть установлен при регистрации или позже.
+     */
+    @Column(name = "address_id")
+    private Long addressId;
+
     private String passHash; // на будущее (пока не юзаю)
     @Builder.Default
     @Column(nullable = false)

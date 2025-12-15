@@ -107,20 +107,17 @@ public class AuthService {
         // Формируем fullName из частей
         String fullName = buildFullName(firstName, lastName, middleName);
 
-        // Создаем пользователя
+        // Создаем пользователя с сохранением addressId
         AppUser user = AppUser.builder()
                 .phone(phone)
                 .email(null) // email не используется
                 .fullName(fullName)
+                .addressId(addressId) // сохраняем addressId при регистрации
                 .build();
 
         user = userRepo.save(user);
 
-        // addressId принимаем, но не обрабатываем сразу
-        // Адрес нужно привязывать позже через nvr-service после создания пользователя
-        // т.к. addressId относится к nvr-service и нужно проверить права на адрес
-
-        return new RegisterResponse(user.getId(), user.getPhone(), user.getFullName(), addressId);
+        return new RegisterResponse(user.getId(), user.getPhone(), user.getFullName(), user.getAddressId());
     }
 
     /**
@@ -158,12 +155,26 @@ public class AuthService {
     }
 
     /**
+     * Обновляет addressId для пользователя.
+     *
+     * @param userId ID пользователя
+     * @param addressId ID адреса
+     */
+    @Transactional
+    public void updateAddressId(Long userId, Long addressId) {
+        AppUser user = userRepo.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
+        user.setAddressId(addressId);
+        userRepo.save(user);
+    }
+
+    /**
      * Ответ на регистрацию.
      */
     public record RegisterResponse(
             Long userId,
             String phone,
             String fullName,
-            Long addressId  // возвращаем обратно, чтобы фронт знал что передал
+            Long addressId  // возвращаем сохраненный addressId
     ) {}
 }

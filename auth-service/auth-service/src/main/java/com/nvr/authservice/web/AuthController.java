@@ -4,10 +4,13 @@ import com.nvr.authservice.service.AuthService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.constraints.NotBlank;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/auth")
@@ -48,7 +51,7 @@ public class AuthController {       // выдача токена
     /**
      * Регистрация нового пользователя.
      * Создает пользователя с телефоном и ФИО.
-     * addressId опциональный - можно привязать адрес позже.
+     * addressId опциональный - сохраняется в БД и можно использовать позже.
      */
     @PostMapping("/register")
     @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.CREATED)
@@ -63,6 +66,27 @@ public class AuthController {       // выдача токена
         return ResponseEntity.status(org.springframework.http.HttpStatus.CREATED).body(response);
     }
 
+    /**
+     * Обновляет addressId для текущего пользователя.
+     * Позволяет привязать или изменить адрес после регистрации.
+     */
+    @PutMapping("/profile/address")
+    public ResponseEntity<?> updateAddress(@RequestBody UpdateAddressRequest req) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || auth.getPrincipal() == null) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNAUTHORIZED).build();
+        }
+        Long userId = Long.valueOf(auth.getPrincipal().toString());
+        
+        try {
+            authService.updateAddressId(userId, req.addressId);
+            return ResponseEntity.ok(Map.of("status", "OK", "message", "Address updated"));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("status", "ERROR", "message", e.getMessage()));
+        }
+    }
+
     // ---- DTO ----
     @Data public static class OtpRequest { public String emailOrPhone; }
     @Data public static class OtpVerify { public String emailOrPhone; public String code; }
@@ -74,7 +98,12 @@ public class AuthController {       // выдача токена
         private String firstName;
         private String lastName;
         private String middleName;
-        private Long addressId; // опциональный, можно привязать адрес позже
+        private Long addressId; // опциональный, сохраняется в БД при регистрации
+    }
+
+    @Data
+    public static class UpdateAddressRequest {
+        private Long addressId; // опциональный, null чтобы отвязать адрес
     }
 
     // старый класс JwtResp можно удалить, он больше не нужен
