@@ -23,7 +23,16 @@ public class AppUser { // таблица юзеров
     private String phone;
 
     @Column(name = "full_name")
-    private String fullName; // ФИО пользователя
+    private String fullName; // ФИО пользователя (legacy, для совместимости)
+
+    @Column(name = "first_name")
+    private String firstName; // Имя
+
+    @Column(name = "last_name")
+    private String lastName; // Фамилия
+
+    @Column(name = "middle_name")
+    private String middleName; // Отчество
 
     /**
      * ID адреса из nvr-service, привязанного к пользователю.

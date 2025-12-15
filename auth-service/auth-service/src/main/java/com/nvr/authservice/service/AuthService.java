@@ -104,20 +104,30 @@ public class AuthService {
             throw new IllegalArgumentException("User with phone " + phone + " already exists");
         }
 
-        // Формируем fullName из частей
+        // Формируем fullName из частей (для совместимости)
         String fullName = buildFullName(firstName, lastName, middleName);
 
-        // Создаем пользователя с сохранением addressId
+        // Создаем пользователя с сохранением всех полей
         AppUser user = AppUser.builder()
                 .phone(phone)
                 .email(null) // email не используется
-                .fullName(fullName)
+                .fullName(fullName) // legacy поле
+                .firstName(firstName)
+                .lastName(lastName)
+                .middleName(middleName)
                 .addressId(addressId) // сохраняем addressId при регистрации
                 .build();
 
         user = userRepo.save(user);
 
-        return new RegisterResponse(user.getId(), user.getPhone(), user.getFullName(), user.getAddressId());
+        return new RegisterResponse(
+                user.getId(),
+                user.getPhone(),
+                user.getFirstName(),
+                user.getLastName(),
+                user.getMiddleName(),
+                user.getAddressId()
+        );
     }
 
     /**
@@ -174,7 +184,9 @@ public class AuthService {
     public record RegisterResponse(
             Long userId,
             String phone,
-            String fullName,
+            String firstName,
+            String lastName,
+            String middleName,
             Long addressId  // возвращаем сохраненный addressId
     ) {}
 }

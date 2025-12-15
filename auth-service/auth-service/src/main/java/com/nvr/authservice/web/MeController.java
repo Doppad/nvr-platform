@@ -64,7 +64,9 @@ public class MeController {     // Возвращает профиль теку�
                 user.getId(),
                 user.getEmail(),
                 user.getPhone(),
-                user.getFullName(),
+                user.getFirstName(),
+                user.getLastName(),
+                user.getMiddleName(),
                 user.getAddressId(), // возвращаем сохраненный addressId
                 new Plan(planCode, archiveDays, maxCameras),
                 subscriptions
@@ -89,7 +91,9 @@ public class MeController {     // Возвращает профиль теку�
             Long id,
             String email,
             String phone,
-            String fullName,
+            String firstName,
+            String lastName,
+            String middleName,
             Long addressId, // ID адреса, сохраненный при регистрации
             Plan plan,
             List<SubscriptionInfo> subscriptions
