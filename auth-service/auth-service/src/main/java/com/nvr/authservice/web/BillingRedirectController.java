@@ -3,23 +3,24 @@ package com.nvr.authservice.web;
 import com.nvr.authservice.repo.PaymentAttemptRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
-import org.springframework.stereotype.Controller;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
 /**
  * Контроллер для landing pages редиректа после оплаты.
  * Tinkoff редиректит на HTTPS страницы, которые затем вызывают диплинк.
  */
-@Controller
+@RestController
 @RequiredArgsConstructor
 public class BillingRedirectController {
 
     private final PaymentAttemptRepository paymentAttemptRepo;
 
     @GetMapping(value = "/billing/redirect/success", produces = MediaType.TEXT_HTML_VALUE)
-    public String successRedirect(@RequestParam(required = false) String paymentId,
-                                  @RequestParam(required = false) String orderId) {
+    public ResponseEntity<String> successRedirect(@RequestParam(required = false) String paymentId,
+                                                  @RequestParam(required = false) String orderId) {
         // Tinkoff может передавать paymentId напрямую, или мы используем orderId из URL
         // Если paymentId передан напрямую - используем его, иначе используем orderId
         String actualPaymentId = paymentId != null ? paymentId : orderId;
@@ -28,12 +29,14 @@ public class BillingRedirectController {
         }
         
         String deeplink = "okodoma://payments/success?paymentId=" + escapeHtml(actualPaymentId);
-        return generateRedirectPage(deeplink, "Успешная оплата", "Оплата прошла успешно!");
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_HTML)
+                .body(generateRedirectPage(deeplink, "Успешная оплата", "Оплата прошла успешно!"));
     }
 
     @GetMapping(value = "/billing/redirect/fail", produces = MediaType.TEXT_HTML_VALUE)
-    public String failRedirect(@RequestParam(required = false) String paymentId,
-                               @RequestParam(required = false) String orderId) {
+    public ResponseEntity<String> failRedirect(@RequestParam(required = false) String paymentId,
+                                               @RequestParam(required = false) String orderId) {
         // Tinkoff может передавать paymentId напрямую, или мы используем orderId из URL
         // Если paymentId передан напрямую - используем его, иначе используем orderId
         String actualPaymentId = paymentId != null ? paymentId : orderId;
@@ -42,7 +45,9 @@ public class BillingRedirectController {
         }
         
         String deeplink = "okodoma://payments/fail?paymentId=" + escapeHtml(actualPaymentId);
-        return generateRedirectPage(deeplink, "Ошибка оплаты", "Оплата не была завершена.");
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_HTML)
+                .body(generateRedirectPage(deeplink, "Ошибка оплаты", "Оплата не была завершена."));
     }
 
     private String generateRedirectPage(String deeplink, String title, String message) {
