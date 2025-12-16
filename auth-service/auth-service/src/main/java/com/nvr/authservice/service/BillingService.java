@@ -106,10 +106,10 @@ public class BillingService {
         String description = String.format("Подписка %s (%s)", plan.getTitle(), planCode);
 
         // Формируем URL для редиректа после оплаты
-        // Tinkoff поддерживает подстановку {PaymentId} в URL, используем его для надежности
-        // Также передаем orderId для fallback
-        String successUrl = publicBaseUrl + "/billing/redirect/success?paymentId={PaymentId}&orderId=" + orderId;
-        String failUrl = publicBaseUrl + "/billing/redirect/fail?paymentId={PaymentId}&orderId=" + orderId;
+        // Используем только orderId, так как Тинькофф не подставляет {PaymentId} в URL редиректа
+        // PaymentId будет получен из БД при обработке редиректа
+        String successUrl = publicBaseUrl + "/billing/redirect/success?orderId=" + orderId;
+        String failUrl = publicBaseUrl + "/billing/redirect/fail?orderId=" + orderId;
 
         // Вызываем API Тинькофф для создания платежа
         TinkoffApiClient.TinkoffInitResponse response = tinkoffApiClient.initPayment(
