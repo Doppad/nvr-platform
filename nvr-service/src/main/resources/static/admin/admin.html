@@ -106,6 +106,28 @@
             padding: 6px;
             font-size: 12px;
         }
+        .device-row-error {
+            background-color: #fef2f2 !important;
+            border-left: 4px solid #dc2626;
+        }
+        .device-row-error td {
+            background-color: #fef2f2 !important;
+        }
+        .cams-stats {
+            font-weight: 600;
+        }
+        .cams-stats.has-error {
+            color: #dc2626;
+        }
+        .error-badge {
+            display: inline-block;
+            background: #dc2626;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-left: 4px;
+        }
     </style>
 </head>
 <body>
@@ -113,6 +135,30 @@
 <p class="hint">
     Демонстрационная панель | <a href="/admin/channels.html">Управление каналами</a>
 </p>
+
+<!-- NVR-устройства - перемещены в самый верх -->
+<div class="grid">
+    <div class="card" style="grid-column: 1 / -1;">
+        <h2>NVR-устройства</h2>
+        <table id="devicesTable">
+            <thead>
+            <tr>
+                <th>ID</th>
+                <th>Название</th>
+                <th>Статус</th>
+                <th>IP:Port</th>
+                <th>Vendor</th>
+                <th>Timezone</th>
+                <th>Cams</th>
+                <th>AddressId</th>
+                <th>Viewer</th>
+                <th>Действия</th>
+            </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</div>
 
 <div class="grid">
     <div class="card">
@@ -193,27 +239,6 @@
                 <th>Город</th>
                 <th>Улица</th>
                 <th>Дом</th>
-                <th>Действия</th>
-            </tr>
-            </thead>
-            <tbody></tbody>
-        </table>
-    </div>
-
-    <div class="card">
-        <h2>NVR-устройства</h2>
-        <table id="devicesTable">
-            <thead>
-            <tr>
-                <th>ID</th>
-                <th>Название</th>
-                <th>Статус</th>
-                <th>IP:Port</th>
-                <th>Vendor</th>
-                <th>Timezone</th>
-                <th>Cams</th>
-                <th>AddressId</th>
-                <th>Viewer</th>
                 <th>Действия</th>
             </tr>
             </thead>
@@ -402,6 +427,35 @@
         }
     }
 
+    async function loadChannelsStats(deviceId) {
+        try {
+            const res = await fetch(`${base}/admin/api/devices/${deviceId}/channels`, {
+                headers: getAdminHeaders()
+            });
+            if (!res.ok) return null;
+            const channels = await res.json();
+            
+            const total = channels.length;
+            const visible = channels.filter(ch => ch.visible !== false).length;
+            const online = channels.filter(ch => {
+                const active = ch.active !== undefined ? ch.active : (ch.isActive !== undefined ? ch.isActive : false);
+                return active;
+            }).length;
+            const hidden = total - visible;
+            const offline = visible - online;
+            const errors = channels.filter(ch => {
+                const active = ch.active !== undefined ? ch.active : (ch.isActive !== undefined ? ch.isActive : false);
+                const visible = ch.visible !== false;
+                return visible && !active; // видимые, но оффлайн = ошибка
+            }).length;
+            
+            return { total, online, hidden, errors, offline };
+        } catch (error) {
+            console.error('Error loading channels stats:', error);
+            return null;
+        }
+    }
+
     async function loadDevices() {
         const res = await fetch(base + '/admin/api/devices', {
             headers: getAdminHeaders()
@@ -413,17 +467,45 @@
         // кешируем устройства для работы кнопок копирования/открытия
         window.__devicesCache = Array.isArray(data) ? data : [];
 
-        data.forEach(d => {
+        // Загружаем статистику каналов для всех устройств параллельно
+        const devicesWithStats = await Promise.all(data.map(async (d) => {
+            const stats = await loadChannelsStats(d.id);
+            return { device: d, stats };
+        }));
+
+        devicesWithStats.forEach(({ device: d, stats }) => {
             const status = guessOnlineStatus(d);
             const dotClass =
                 status === 'online' ? 'status-dot status-online'
                     : status === 'offline' ? 'status-dot status-offline'
                     : 'status-dot';
 
+            // Формируем строку статистики камер
+            let camsText = d.camerasCount ?? '0';
+            let camsClass = '';
+            let errorBadge = '';
+            
+            if (stats) {
+                const { total, online, hidden, errors } = stats;
+                if (errors > 0) {
+                    camsText = `${total}/${online}(+${hidden})/${errors}`;
+                    camsClass = 'cams-stats has-error';
+                    errorBadge = `<span class="error-badge">${errors} ошибок</span>`;
+                } else {
+                    camsText = `${total}/${online}(+${hidden})/0`;
+                    camsClass = 'cams-stats';
+                }
+            }
+
             const tr = document.createElement('tr');
+            // Добавляем класс ошибки, если есть ошибки
+            if (stats && stats.errors > 0) {
+                tr.className = 'device-row-error';
+            }
+            
             tr.innerHTML = `
                 <td>${d.id}</td>
-                <td>${d.name}</td>
+                <td>${d.name}${errorBadge}</td>
                 <td>
                     <span class="${dotClass}"></span>
                     <span>${status === 'online' ? 'В сети' : status === 'offline' ? 'Не в сети' : 'Неизвестно'}</span>
@@ -431,7 +513,7 @@
                 <td>${d.ip}:${d.port}</td>
                 <td>${d.vendor ?? ''}</td>
                 <td>${d.timezone ?? ''}</td>
-                <td>${d.camerasCount ?? ''}</td>
+                <td class="${camsClass}">${camsText}</td>
                 <td>${d.address?.id ?? ''}</td>
                 <td>${d.viewerLogin ?? ''}</td>
                 <td>
@@ -455,6 +537,19 @@
                 const wrapper = document.createElement('div');
                 wrapper.className = 'hint';
                 wrapper.textContent = 'Каналы:';
+
+                // Показываем ошибки даже в collapsed состоянии
+                if (stats && stats.errors > 0) {
+                    const errorInfo = document.createElement('div');
+                    errorInfo.style.color = '#dc2626';
+                    errorInfo.style.fontWeight = '600';
+                    errorInfo.style.marginTop = '8px';
+                    errorInfo.style.padding = '8px';
+                    errorInfo.style.background = '#fef2f2';
+                    errorInfo.style.borderRadius = '6px';
+                    errorInfo.textContent = `⚠️ Обнаружено ${stats.errors} камер с ошибками (оффлайн)`;
+                    col.appendChild(errorInfo);
+                }
 
                 // Для всех устройств Dahua показываем сетку с загрузкой каналов через API
                 if (d.vendor === 'Dahua' && cams > 0) {
@@ -677,6 +772,7 @@
     })();
 
     // Блок выбора пользователя, от имени которого смотрим систему
+    // Перемещен вниз, чтобы NVR-устройства были в самом верху
     (function setupImpersonationControls() {
         const panel = document.createElement('div');
         panel.className = 'card';
@@ -690,7 +786,9 @@
         `;
 
         const body = document.body;
-        body.insertBefore(panel, body.querySelector('.grid'));
+        // Вставляем в конец, после всех grid блоков
+        const scripts = body.querySelector('script');
+        body.insertBefore(panel, scripts);
 
         const input = document.getElementById('impersonateUserId');
         const btn = document.getElementById('applyImpersonation');
@@ -713,6 +811,13 @@
     // первичная загрузка для сохранённого пользователя
     loadAddresses();
     loadDevices();
+
+    // Автоматическое обновление каждую минуту
+    setInterval(() => {
+        console.log('Auto-refreshing devices and addresses...');
+        loadAddresses();
+        loadDevices();
+    }, 60000); // 60 секунд = 1 минута
 </script>
 </body>
 </html>
