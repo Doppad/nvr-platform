@@ -30,7 +30,7 @@ public class BillingService {
     private final SubscriptionPlanRepository planRepo;
     private final UserSubscriptionRepository subscriptionRepo;
 
-    @Value("${app.billing.public-base-url:https://pay.okodoma.com}")
+    @Value("${app.billing.public-base-url:https://pay.okodoma.ru}")
     private String publicBaseUrl;
 
     /**

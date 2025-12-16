@@ -33,4 +33,4 @@ app:
     terminal-key: ${APP_TINKOFF_TERMINAL_KEY:1764771769246DEMO}
     password: ${APP_TINKOFF_PASSWORD:evjMB_tTiMh8rm9P}
   billing:
-    public-base-url: ${APP_BILLING_PUBLIC_BASE_URL:https://pay.okodoma.com}
+    public-base-url: ${APP_BILLING_PUBLIC_BASE_URL:https://pay.okodoma.ru}
