@@ -25,6 +25,8 @@ public class BillingRedirectController {
     @GetMapping(value = "/billing/redirect/success", produces = MediaType.TEXT_HTML_VALUE)
     public ResponseEntity<String> successRedirect(@RequestParam(required = false) String paymentId,
                                                   @RequestParam(required = false) String orderId) {
+        log.info("Success redirect page accessed: PaymentId={}, OrderId={}", paymentId, orderId);
+        
         // Пытаемся автоматически обработать платеж, если webhook не пришел
         // Это безопасно - метод проверяет статус и не создаст дубликат подписки
         try {

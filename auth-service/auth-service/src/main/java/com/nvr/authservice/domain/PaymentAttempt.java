@@ -51,11 +51,16 @@ public class PaymentAttempt {
     private String provider;
 
     /**
-     * Внешний идентификатор сессии/платежа у провайдера.
-     * Пока фиктивный.
+     * Внешний идентификатор сессии/платежа у провайдера (PaymentId от Тинькофф).
      */
     @Column(name = "provider_session_id", length = 128)
     private String providerSessionId;
+
+    /**
+     * Номер заказа (OrderId), используется для поиска платежа при редиректе.
+     */
+    @Column(name = "order_id", length = 128)
+    private String orderId;
 
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;

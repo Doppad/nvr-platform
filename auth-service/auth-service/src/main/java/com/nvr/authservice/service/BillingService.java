@@ -96,6 +96,7 @@ public class BillingService {
                 .planCode(planCode)
                 .status("PENDING")
                 .provider("TINKOFF")
+                .orderId(orderId) // Сохраняем orderId отдельно для поиска
                 .providerSessionId(orderId) // временно, потом обновим на PaymentId
                 .build();
 
@@ -105,10 +106,10 @@ public class BillingService {
         String description = String.format("Подписка %s (%s)", plan.getTitle(), planCode);
 
         // Формируем URL для редиректа после оплаты
-        // Используем orderId в URL, а на landing page найдем paymentId по orderId из БД
-        // Tinkoff поддерживает подстановку {PaymentId}, но для надежности используем orderId
-        String successUrl = publicBaseUrl + "/billing/redirect/success?orderId=" + orderId;
-        String failUrl = publicBaseUrl + "/billing/redirect/fail?orderId=" + orderId;
+        // Tinkoff поддерживает подстановку {PaymentId} в URL, используем его для надежности
+        // Также передаем orderId для fallback
+        String successUrl = publicBaseUrl + "/billing/redirect/success?paymentId={PaymentId}&orderId=" + orderId;
+        String failUrl = publicBaseUrl + "/billing/redirect/fail?paymentId={PaymentId}&orderId=" + orderId;
 
         // Вызываем API Тинькофф для создания платежа
         TinkoffApiClient.TinkoffInitResponse response = tinkoffApiClient.initPayment(
@@ -137,10 +138,21 @@ public class BillingService {
      */
     @Transactional
     public void handleSuccessfulPayment(String paymentId, String orderId) {
+        log.info("handleSuccessfulPayment called: PaymentId={}, OrderId={}", paymentId, orderId);
+        
         // Находим попытку платежа по orderId или paymentId
         PaymentAttempt attempt = paymentAttemptRepo.findByProviderSessionId(paymentId)
-                .orElseGet(() -> paymentAttemptRepo.findByProviderSessionId(orderId)
-                        .orElseThrow(() -> new IllegalArgumentException("Payment attempt not found: " + paymentId)));
+                .orElseGet(() -> {
+                    if (orderId != null) {
+                        return paymentAttemptRepo.findByOrderId(orderId)
+                                .orElseThrow(() -> new IllegalArgumentException("Payment attempt not found for PaymentId=" + paymentId + ", OrderId=" + orderId));
+                    }
+                    throw new IllegalArgumentException("Payment attempt not found for PaymentId=" + paymentId);
+                });
+
+        log.info("Found payment attempt in handleSuccessfulPayment: Id={}, Status={}, ProviderSessionId={}, PlanCode={}, UserId={}", 
+                attempt.getId(), attempt.getStatus(), attempt.getProviderSessionId(), 
+                attempt.getPlanCode(), attempt.getUser().getId());
 
         if (!"PENDING".equals(attempt.getStatus())) {
             log.warn("Payment attempt {} already processed with status {}", attempt.getId(), attempt.getStatus());
@@ -148,7 +160,10 @@ public class BillingService {
         }
 
         // Проверяем статус в Тинькофф
+        log.info("Checking payment status in handleSuccessfulPayment with PaymentId={}", paymentId);
         TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentId);
+        log.info("Payment status from Tinkoff in handleSuccessfulPayment: Status={}, Success={}", state.status(), state.success());
+        
         // Для тестовых платежей Тинькофф может возвращать AUTHORIZED вместо CONFIRMED
         if (!"CONFIRMED".equals(state.status()) && !"AUTHORIZED".equals(state.status())) {
             log.warn("Payment {} status is not CONFIRMED or AUTHORIZED: {}", paymentId, state.status());
@@ -160,6 +175,7 @@ public class BillingService {
         // Обновляем статус попытки платежа
         attempt.setStatus("SUCCESS");
         paymentAttemptRepo.save(attempt);
+        log.info("Updated payment attempt status to SUCCESS: AttemptId={}", attempt.getId());
 
         // Создаем подписку
         SubscriptionPlan plan = planRepo.findByCode(attempt.getPlanCode())
@@ -167,6 +183,9 @@ public class BillingService {
 
         Instant now = Instant.now();
         Instant endsAt = now.plus(30, ChronoUnit.DAYS); // подписка на 30 дней
+
+        log.info("Creating subscription: UserId={}, PlanCode={}, StartsAt={}, EndsAt={}", 
+                attempt.getUser().getId(), plan.getCode(), now, endsAt);
 
         UserSubscription subscription = UserSubscription.builder()
                 .user(attempt.getUser())
@@ -177,6 +196,8 @@ public class BillingService {
                 .build();
 
         subscriptionRepo.save(subscription);
+        log.info("Subscription saved: SubscriptionId={}, UserId={}, PlanCode={}, Active={}, EndsAt={}", 
+                subscription.getId(), attempt.getUser().getId(), plan.getCode(), subscription.isActive(), subscription.getEndsAt());
 
         log.info("Created subscription for user {}: Plan={}, PaymentId={}, SubscriptionId={}",
                 attempt.getUser().getId(), plan.getCode(), paymentId, subscription.getId());
@@ -191,8 +212,7 @@ public class BillingService {
     @Transactional
     public void handleFailedPayment(String paymentId, String orderId) {
         PaymentAttempt attempt = paymentAttemptRepo.findByProviderSessionId(paymentId)
-                .orElseGet(() -> paymentAttemptRepo.findByProviderSessionId(orderId)
-                        .orElse(null));
+                .orElseGet(() -> orderId != null ? paymentAttemptRepo.findByOrderId(orderId).orElse(null) : null);
 
         if (attempt == null) {
             log.warn("Payment attempt not found for PaymentId={}, OrderId={}", paymentId, orderId);
@@ -223,6 +243,8 @@ public class BillingService {
     @Transactional
     public boolean tryProcessPayment(String orderId, String paymentId) {
         try {
+            log.info("tryProcessPayment called: PaymentId={}, OrderId={}", paymentId, orderId);
+            
             // Определяем, какой идентификатор использовать
             String identifier = paymentId != null ? paymentId : orderId;
             if (identifier == null) {
@@ -234,9 +256,11 @@ public class BillingService {
             PaymentAttempt attempt = null;
             if (paymentId != null) {
                 attempt = paymentAttemptRepo.findByProviderSessionId(paymentId).orElse(null);
+                log.debug("Searching by paymentId={}, found: {}", paymentId, attempt != null);
             }
             if (attempt == null && orderId != null) {
-                attempt = paymentAttemptRepo.findByProviderSessionId(orderId).orElse(null);
+                attempt = paymentAttemptRepo.findByOrderId(orderId).orElse(null);
+                log.debug("Searching by orderId={}, found: {}", orderId, attempt != null);
             }
 
             if (attempt == null) {
@@ -244,33 +268,44 @@ public class BillingService {
                 return false;
             }
 
+            log.info("Found payment attempt: Id={}, Status={}, ProviderSessionId={}, PlanCode={}, UserId={}", 
+                    attempt.getId(), attempt.getStatus(), attempt.getProviderSessionId(), 
+                    attempt.getPlanCode(), attempt.getUser().getId());
+
             // Если уже обработан, возвращаем true (успешно обработан ранее)
             if (!"PENDING".equals(attempt.getStatus())) {
                 log.info("Payment {} already processed with status {}", identifier, attempt.getStatus());
                 return true;
             }
 
-            // Используем paymentId для проверки статуса
+            // Определяем paymentId для проверки статуса
             // providerSessionId должен содержать paymentId от Тинькофф (обновляется после создания платежа)
             String paymentIdForCheck = attempt.getProviderSessionId();
-            if (paymentIdForCheck == null) {
-                log.warn("Cannot check payment status: PaymentId not found in attempt");
-                return false;
-            }
             
             // Если providerSessionId это orderId (начинается с ORDER_), значит paymentId еще не был сохранен
-            if (paymentIdForCheck.startsWith("ORDER_")) {
-                log.warn("PaymentId not yet saved in attempt, using provided paymentId={}", paymentId);
-                if (paymentId != null) {
+            // Используем переданный paymentId, если он есть
+            if (paymentIdForCheck == null || paymentIdForCheck.startsWith("ORDER_")) {
+                log.warn("PaymentId not yet saved in attempt (providerSessionId={}), trying to use provided paymentId={}", 
+                        paymentIdForCheck, paymentId);
+                if (paymentId != null && !paymentId.startsWith("ORDER_")) {
                     paymentIdForCheck = paymentId;
+                    log.info("Using provided paymentId={} for status check", paymentIdForCheck);
                 } else {
-                    log.warn("Cannot check payment status: PaymentId not available");
+                    log.warn("Cannot check payment status: PaymentId not available (providerSessionId={}, provided paymentId={})", 
+                            paymentIdForCheck, paymentId);
                     return false;
                 }
+            } else {
+                // paymentId уже сохранен в БД, используем его
+                log.info("Using paymentId from DB: {}", paymentIdForCheck);
             }
 
+            log.info("Checking payment status with PaymentId={}", paymentIdForCheck);
+            
             // Проверяем статус в Тинькофф
             TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentIdForCheck);
+            log.info("Payment status from Tinkoff: Status={}, Success={}", state.status(), state.success());
+            
             // Для тестовых платежей Тинькофф может возвращать AUTHORIZED вместо CONFIRMED
             if (!"CONFIRMED".equals(state.status()) && !"AUTHORIZED".equals(state.status())) {
                 log.warn("Payment {} status is not CONFIRMED or AUTHORIZED: {}", paymentIdForCheck, state.status());
@@ -278,12 +313,14 @@ public class BillingService {
             }
 
             // Обрабатываем успешный платеж (создает подписку)
+            log.info("Calling handleSuccessfulPayment with PaymentId={}, OrderId={}", paymentIdForCheck, orderId);
             handleSuccessfulPayment(paymentIdForCheck, orderId);
             log.info("Successfully processed payment from redirect page: PaymentId={}, OrderId={}", paymentIdForCheck, orderId);
             return true;
         } catch (Exception e) {
             log.error("Error processing payment from redirect page: PaymentId={}, OrderId={}, Error={}", 
                     paymentId, orderId, e.getMessage(), e);
+            e.printStackTrace();
             return false;
         }
     }
