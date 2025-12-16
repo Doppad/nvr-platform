@@ -105,7 +105,8 @@ public class BillingController {
                 return ResponseEntity.ok(Map.of("status", "ERROR", "message", "Invalid token"));
             }
 
-            if (req.success != null && req.success && "CONFIRMED".equals(req.status)) {
+            // Для тестовых платежей Тинькофф может возвращать AUTHORIZED вместо CONFIRMED
+            if (req.success != null && req.success && ("CONFIRMED".equals(req.status) || "AUTHORIZED".equals(req.status))) {
                 billingService.handleSuccessfulPayment(req.paymentId, req.orderId);
                 return ResponseEntity.ok(Map.of("status", "OK"));
             } else {

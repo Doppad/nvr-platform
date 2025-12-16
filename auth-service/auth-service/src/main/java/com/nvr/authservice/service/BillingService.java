@@ -149,8 +149,9 @@ public class BillingService {
 
         // Проверяем статус в Тинькофф
         TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentId);
-        if (!"CONFIRMED".equals(state.status())) {
-            log.warn("Payment {} status is not CONFIRMED: {}", paymentId, state.status());
+        // Для тестовых платежей Тинькофф может возвращать AUTHORIZED вместо CONFIRMED
+        if (!"CONFIRMED".equals(state.status()) && !"AUTHORIZED".equals(state.status())) {
+            log.warn("Payment {} status is not CONFIRMED or AUTHORIZED: {}", paymentId, state.status());
             attempt.setStatus("FAILED");
             paymentAttemptRepo.save(attempt);
             return;
@@ -236,8 +237,9 @@ public class BillingService {
 
         // Проверяем статус в Тинькофф
         TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentId);
-        if (!"CONFIRMED".equals(state.status())) {
-            throw new IllegalArgumentException("Payment status is not CONFIRMED: " + state.status());
+        // Для тестовых платежей Тинькофф может возвращать AUTHORIZED вместо CONFIRMED
+        if (!"CONFIRMED".equals(state.status()) && !"AUTHORIZED".equals(state.status())) {
+            throw new IllegalArgumentException("Payment status is not CONFIRMED or AUTHORIZED: " + state.status());
         }
 
         // Обрабатываем успешный платеж (создает подписку)
