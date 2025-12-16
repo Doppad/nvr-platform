@@ -1,7 +1,9 @@
 package com.nvr.authservice.web;
 
 import com.nvr.authservice.repo.PaymentAttemptRepository;
+import com.nvr.authservice.service.BillingService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -12,15 +14,32 @@ import org.springframework.web.bind.annotation.RestController;
  * Контроллер для landing pages редиректа после оплаты.
  * Tinkoff редиректит на HTTPS страницы, которые затем вызывают диплинк.
  */
+@Slf4j
 @RestController
 @RequiredArgsConstructor
 public class BillingRedirectController {
 
     private final PaymentAttemptRepository paymentAttemptRepo;
+    private final BillingService billingService;
 
     @GetMapping(value = "/billing/redirect/success", produces = MediaType.TEXT_HTML_VALUE)
     public ResponseEntity<String> successRedirect(@RequestParam(required = false) String paymentId,
                                                   @RequestParam(required = false) String orderId) {
+        // Пытаемся автоматически обработать платеж, если webhook не пришел
+        // Это безопасно - метод проверяет статус и не создаст дубликат подписки
+        try {
+            boolean processed = billingService.tryProcessPayment(orderId, paymentId);
+            if (processed) {
+                log.info("Payment processed from redirect page: PaymentId={}, OrderId={}", paymentId, orderId);
+            } else {
+                log.warn("Payment could not be processed from redirect page: PaymentId={}, OrderId={}", paymentId, orderId);
+            }
+        } catch (Exception e) {
+            log.error("Error processing payment from redirect page: PaymentId={}, OrderId={}, Error={}", 
+                    paymentId, orderId, e.getMessage(), e);
+            // Продолжаем показ страницы даже если обработка не удалась
+        }
+
         // Tinkoff может передавать paymentId напрямую, или мы используем orderId из URL
         // Если paymentId передан напрямую - используем его, иначе используем orderId
         String actualPaymentId = paymentId != null ? paymentId : orderId;

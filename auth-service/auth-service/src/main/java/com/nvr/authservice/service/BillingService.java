@@ -212,6 +212,83 @@ public class BillingService {
     }
 
     /**
+     * Автоматически обрабатывает платеж по orderId или paymentId.
+     * Используется как fallback на странице редиректа, когда webhook не приходит.
+     * Безопасно вызывать несколько раз - проверяет статус PENDING.
+     *
+     * @param orderId номер заказа (может быть null)
+     * @param paymentId идентификатор платежа в системе Тинькофф (может быть null)
+     * @return true, если платеж был успешно обработан, false если уже обработан или не найден
+     */
+    @Transactional
+    public boolean tryProcessPayment(String orderId, String paymentId) {
+        try {
+            // Определяем, какой идентификатор использовать
+            String identifier = paymentId != null ? paymentId : orderId;
+            if (identifier == null) {
+                log.warn("Both orderId and paymentId are null, cannot process payment");
+                return false;
+            }
+
+            // Пытаемся найти платеж: сначала по paymentId, потом по orderId
+            PaymentAttempt attempt = null;
+            if (paymentId != null) {
+                attempt = paymentAttemptRepo.findByProviderSessionId(paymentId).orElse(null);
+            }
+            if (attempt == null && orderId != null) {
+                attempt = paymentAttemptRepo.findByProviderSessionId(orderId).orElse(null);
+            }
+
+            if (attempt == null) {
+                log.warn("Payment attempt not found for PaymentId={}, OrderId={}", paymentId, orderId);
+                return false;
+            }
+
+            // Если уже обработан, возвращаем true (успешно обработан ранее)
+            if (!"PENDING".equals(attempt.getStatus())) {
+                log.info("Payment {} already processed with status {}", identifier, attempt.getStatus());
+                return true;
+            }
+
+            // Используем paymentId для проверки статуса
+            // providerSessionId должен содержать paymentId от Тинькофф (обновляется после создания платежа)
+            String paymentIdForCheck = attempt.getProviderSessionId();
+            if (paymentIdForCheck == null) {
+                log.warn("Cannot check payment status: PaymentId not found in attempt");
+                return false;
+            }
+            
+            // Если providerSessionId это orderId (начинается с ORDER_), значит paymentId еще не был сохранен
+            if (paymentIdForCheck.startsWith("ORDER_")) {
+                log.warn("PaymentId not yet saved in attempt, using provided paymentId={}", paymentId);
+                if (paymentId != null) {
+                    paymentIdForCheck = paymentId;
+                } else {
+                    log.warn("Cannot check payment status: PaymentId not available");
+                    return false;
+                }
+            }
+
+            // Проверяем статус в Тинькофф
+            TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentIdForCheck);
+            // Для тестовых платежей Тинькофф может возвращать AUTHORIZED вместо CONFIRMED
+            if (!"CONFIRMED".equals(state.status()) && !"AUTHORIZED".equals(state.status())) {
+                log.warn("Payment {} status is not CONFIRMED or AUTHORIZED: {}", paymentIdForCheck, state.status());
+                return false;
+            }
+
+            // Обрабатываем успешный платеж (создает подписку)
+            handleSuccessfulPayment(paymentIdForCheck, orderId);
+            log.info("Successfully processed payment from redirect page: PaymentId={}, OrderId={}", paymentIdForCheck, orderId);
+            return true;
+        } catch (Exception e) {
+            log.error("Error processing payment from redirect page: PaymentId={}, OrderId={}, Error={}", 
+                    paymentId, orderId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
      * Подтверждает платеж и активирует подписку без webhook.
      * Используется как fallback, когда webhook не приходит.
      *
