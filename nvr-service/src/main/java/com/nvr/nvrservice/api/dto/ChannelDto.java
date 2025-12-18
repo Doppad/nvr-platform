@@ -14,13 +14,21 @@ public class ChannelDto {
     private Integer channelNumber;  // 1..16
     private String name;            // название канала
     private String rtspUrl;         // RTSP URL
-    private Boolean active;         // активен ли канал (online/offline)
+    private Boolean active;         // активен ли канал (online/offline) - legacy, используйте uiStatus
     private Boolean visible;        // должен ли канал отображаться в UI (false для пустых каналов)
+    
+    // Новое поле для UI статуса (вычисляется на бэке)
+    private String uiStatus;        // ONLINE | OFFLINE | HIDDEN | ONLINE_NO_STREAM | UNKNOWN
+    
+    // Новые поля статусов
+    private Boolean hasCamera;      // есть ли реальная камера на канале
+    private String nvrStatus;       // ONLINE | OFFLINE | UNKNOWN (только из Dahua API)
+    private String rtspStatus;      // OK | FAIL | NONE (только из RTSP проверки)
     
     // Дополнительные поля (опционально, для обратной совместимости)
     private Long id;
     private Integer channelNo;      // alias для channelNumber
-    private String status;
+    private String status;           // legacy поле
     private String ipAddress;
     private Integer port;
     private String deviceName;

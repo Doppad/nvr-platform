@@ -46,6 +46,7 @@ public class NvrSyncService {
     /**
      * Синхронизирует каналы для всех устройств Dahua.
      * Выполняется по расписанию (каждые 5 минут).
+     * Обновляет только структуру каналов и nvr_status (не выполняет RTSP проверку).
      */
     @Scheduled(fixedRate = 300000) // 5 минут
     public void syncAllDevices() {
@@ -67,6 +68,31 @@ public class NvrSyncService {
         }
 
         log.info("Finished synchronization of all Dahua devices");
+    }
+
+    /**
+     * Проверяет RTSP доступность для всех устройств Dahua.
+     * Выполняется по расписанию (каждые 10 минут).
+     * Обновляет только rtsp_status (не трогает структуру и nvr_status).
+     * Можно отключить, если RTSP проверка выполняется только вручную.
+     */
+    @Scheduled(fixedRate = 600000, initialDelay = 600000) // 10 минут, старт через 10 минут после запуска
+    public void checkRtspHealthForAllDevices() {
+        log.info("Starting RTSP health check for all Dahua devices");
+
+        List<Long> dahuaDeviceIds = getDahuaDeviceIds();
+        log.info("Found {} Dahua devices for RTSP health check", dahuaDeviceIds.size());
+
+        for (Long deviceId : dahuaDeviceIds) {
+            try {
+                checkRtspHealthForDevice(deviceId);
+            } catch (Exception e) {
+                log.error("Failed to check RTSP health for device {}: {}",
+                        deviceId, e.getMessage(), e);
+            }
+        }
+
+        log.info("Finished RTSP health check for all Dahua devices");
     }
 
     /**
@@ -105,7 +131,7 @@ public class NvrSyncService {
      */
     @Transactional
     public void syncDeviceChannels(NvrDevice device) {
-        log.debug("Syncing channels for device {} ({}: {})", device.getId(), device.getName(), device.getIp());
+        log.info("Starting sync for device {} ({}: {})", device.getId(), device.getName(), device.getIp());
 
         // Получаем учётные данные администратора (обычно роль "user_admin" или "user_default")
         Optional<NvrDeviceUser> adminUser = deviceUserRepo.findByDeviceIdAndRole(device.getId(), "user_admin");
@@ -126,6 +152,16 @@ public class NvrSyncService {
         int httpPort = device.getHttpPort() != null ? device.getHttpPort() : 
                       (device.getPort() != null ? device.getPort() : 80);
         String baseUrl = String.format("http://%s:%d", device.getIp(), httpPort);
+
+        // Получаем максимальное количество каналов из Dahua API (если ещё не сохранено)
+        if (device.getMaxChannels() == null && "Dahua".equalsIgnoreCase(device.getVendor())) {
+            Integer maxChannels = dahuaApiClient.getMaxRemoteInputChannels(baseUrl, username, password);
+            if (maxChannels != null) {
+                device.setMaxChannels(maxChannels);
+                deviceRepo.save(device);
+                log.debug("Retrieved and saved maxChannels={} for device {}", maxChannels, device.getId());
+            }
+        }
 
         // Для всех устройств Dahua пытаемся использовать ChannelTitle
         // Если ChannelTitle не работает, используем старый метод getChannels
@@ -151,11 +187,23 @@ public class NvrSyncService {
                 device.setCamerasCount(actualChannelsCount);
                 deviceRepo.save(device);
                 
-                log.debug("Synced {} channels for device {}. Updated {} channels.", 
-                        actualChannelsCount, device.getId(), updatedCount);
+                // Подсчитываем статистику для итогового лога
+                List<NvrCamera> allCameras = cameraRepo.findByDeviceId(device.getId());
+                long onlineCount = allCameras.stream()
+                        .filter(c -> "ONLINE".equals(c.getNvrStatus()))
+                        .count();
+                long offlineCount = allCameras.stream()
+                        .filter(c -> "OFFLINE".equals(c.getNvrStatus()))
+                        .count();
+                long hiddenCount = allCameras.stream()
+                        .filter(c -> Boolean.FALSE.equals(c.getHasCamera()))
+                        .count();
                 
-                // Проверяем RTSP доступность для всех каналов
-                checkRtspHealthForDevice(device.getId());
+                log.info("Sync completed for device {}: {} channels ({} online, {} offline, {} hidden)", 
+                        device.getId(), actualChannelsCount, onlineCount, offlineCount, hiddenCount);
+                
+                // RTSP проверка выполняется отдельно по расписанию или через отдельный endpoint
+                // Не блокируем синхронизацию структуры RTSP проверками
             } else {
                 // ChannelTitle не вернул данные или вернул мало каналов - используем старый метод
                 log.debug("ChannelTitle returned {} channels, trying getChannels API for device {}", 
@@ -165,7 +213,8 @@ public class NvrSyncService {
                 
                 if (channels.isEmpty()) {
                     log.warn("Received empty channel list from device {} (id={}, ip={}, httpPort={}). " +
-                            "Device may be offline or API endpoint returned error/HTML.",
+                            "Device may be offline or API endpoint returned error/HTML. " +
+                            "Existing camera data preserved.",
                             device.getName(), device.getId(), device.getIp(), httpPort);
                     return;
                 }
@@ -184,7 +233,20 @@ public class NvrSyncService {
                 device.setCamerasCount(channels.size());
                 deviceRepo.save(device);
 
-                log.debug("Successfully synced {} channels for device {}", channels.size(), device.getId());
+                // Подсчитываем статистику для итогового лога
+                List<NvrCamera> allCameras = cameraRepo.findByDeviceId(device.getId());
+                long onlineCount = allCameras.stream()
+                        .filter(c -> "ONLINE".equals(c.getNvrStatus()))
+                        .count();
+                long offlineCount = allCameras.stream()
+                        .filter(c -> "OFFLINE".equals(c.getNvrStatus()))
+                        .count();
+                long hiddenCount = allCameras.stream()
+                        .filter(c -> Boolean.FALSE.equals(c.getHasCamera()))
+                        .count();
+                
+                log.info("Sync completed for device {}: {} channels ({} online, {} offline, {} hidden)", 
+                        device.getId(), channels.size(), onlineCount, offlineCount, hiddenCount);
             }
         } else {
             // Для не-Dahua устройств используем старую логику
@@ -217,14 +279,53 @@ public class NvrSyncService {
         String rtspUrlTemplate = String.format("rtsp://%s:%s@%s:%d/cam/realmonitor?channel=%%d&subtype=0",
                 username, password, device.getIp(), rtspPort);
 
+        // Определяем, были ли получены реальные данные о статусах камер
+        // Если cameraStates пустой или null - не обновляем nvr_status, чтобы не затереть существующие значения
+        boolean hasCameraStates = cameraStates != null && !cameraStates.isEmpty();
+        
+        if (!hasCameraStates) {
+            log.debug("No camera states received from Dahua API for device {} ({}). " +
+                    "Preserving existing nvr_status values.", 
+                    device.getId(), device.getName());
+        }
+
         // Обрабатываем каналы из API
         for (DahuaChannelDto channelDto : channels) {
             int channelNo = channelDto.channelNo();
             NvrCamera camera = existingByChannelNo.get(channelNo);
 
-            // Определяем статус камеры из состояния
-            String connectionState = cameraStates.getOrDefault(channelNo, "Unknown");
-            String status = mapConnectionStateToStatus(connectionState);
+            // Определяем nvr_status и has_camera из состояния (только из Dahua API)
+            // ВАЖНО: обновляем nvr_status только если получили реальные данные от API
+            String nvrStatus = null;
+            boolean hasCamera = false;
+            String connectionState = null;
+            
+            if (hasCameraStates) {
+                connectionState = cameraStates.getOrDefault(channelNo, null);
+                if (connectionState != null) {
+                    nvrStatus = mapConnectionStateToStatus(connectionState);
+                    hasCamera = determineHasCameraFromState(connectionState);
+                } else {
+                    // Если для этого канала нет состояния в API, используем fallback
+                    // Камера считается реальной, если есть ip_address, device_name или channel_name
+                    hasCamera = (channelDto.ipAddress() != null && !channelDto.ipAddress().isEmpty()) ||
+                               (channelDto.deviceName() != null && !channelDto.deviceName().isEmpty()) ||
+                               (channelDto.channelName() != null && !channelDto.channelName().isEmpty());
+                    nvrStatus = "UNKNOWN";
+                }
+            } else {
+                // Если данных от API нет - сохраняем существующий статус или используем fallback
+                if (camera != null && camera.getNvrStatus() != null) {
+                    nvrStatus = camera.getNvrStatus(); // Сохраняем существующий статус
+                    hasCamera = Boolean.TRUE.equals(camera.getHasCamera()); // Сохраняем существующий has_camera
+                } else {
+                    // Для новых каналов используем fallback на основе данных канала
+                    hasCamera = (channelDto.ipAddress() != null && !channelDto.ipAddress().isEmpty()) ||
+                               (channelDto.deviceName() != null && !channelDto.deviceName().isEmpty()) ||
+                               (channelDto.channelName() != null && !channelDto.channelName().isEmpty());
+                    nvrStatus = "UNKNOWN";
+                }
+            }
 
             // Формируем RTSP URL для конкретного канала
             String rtspUrl = String.format(rtspUrlTemplate, channelNo);
@@ -244,13 +345,18 @@ public class NvrSyncService {
                         .protocol(channelDto.protocol())
                         .type(channelDto.type())
                         .rtspUrl(rtspUrl)
-                        .status(status)
+                        .status("UNKNOWN") // legacy поле
                         .isActive(true)
                         .statusUpdatedAt(now)
+                        .hasCamera(hasCamera)
+                        .nvrStatus(nvrStatus)
+                        .nvrStatusUpdatedAt(hasCameraStates ? now : null) // Обновляем timestamp только если получили данные
+                        // rtsp_status и rtsp_status_updated_at не трогаем - они обновляются отдельно
                         .createdAt(now)
                         .build();
 
-                log.debug("Creating new camera: channelNo={}, name={}", channelNo, camera.getName());
+                log.debug("Creating new camera: channelNo={}, name={}, hasCamera={}, nvrStatus={}, hasCameraStates={}", 
+                        channelNo, camera.getName(), hasCamera, nvrStatus, hasCameraStates);
             } else {
                 // Обновляем существующий канал (upsert)
                 camera.setName(channelDto.channelName() != null && !channelDto.channelName().isEmpty()
@@ -262,11 +368,24 @@ public class NvrSyncService {
                 camera.setProtocol(channelDto.protocol());
                 camera.setType(channelDto.type());
                 camera.setRtspUrl(rtspUrl);
-                camera.setStatus(status);
+                camera.setStatus("UNKNOWN"); // legacy поле
                 camera.setIsActive(true);
                 camera.setStatusUpdatedAt(now);
+                // Обновляем только nvr_status (не трогаем rtsp_status)
+                camera.setHasCamera(hasCamera);
+                // Обновляем nvr_status только если получили реальные данные от API
+                if (hasCameraStates) {
+                    camera.setNvrStatus(nvrStatus);
+                    camera.setNvrStatusUpdatedAt(now);
+                } else {
+                    // Сохраняем существующий статус, если данных от API нет
+                    log.debug("Preserving existing nvr_status={} for channel {} (no API data)", 
+                            camera.getNvrStatus(), channelNo);
+                }
+                // rtsp_status и rtsp_status_updated_at не трогаем - они обновляются отдельно
 
-                log.debug("Updating existing camera: channelNo={}, name={}", channelNo, camera.getName());
+                log.debug("Updating existing camera: channelNo={}, name={}, hasCamera={}, nvrStatus={}, hasCameraStates={}", 
+                        channelNo, camera.getName(), hasCamera, nvrStatus, hasCameraStates);
             }
 
             cameraRepo.save(camera);
@@ -276,8 +395,12 @@ public class NvrSyncService {
         // Деактивируем каналы, которых больше нет в API
         for (NvrCamera removedCamera : existingByChannelNo.values()) {
             removedCamera.setIsActive(false);
-            removedCamera.setStatus("UNKNOWN");
+            removedCamera.setStatus("UNKNOWN"); // legacy поле
             removedCamera.setStatusUpdatedAt(now);
+            removedCamera.setHasCamera(false);
+            removedCamera.setNvrStatus("UNKNOWN");
+            removedCamera.setNvrStatusUpdatedAt(now);
+            // rtsp_status не трогаем - он обновляется отдельно
             cameraRepo.save(removedCamera);
             log.debug("Deactivated camera: channelNo={}", removedCamera.getChannelNo());
         }
@@ -307,10 +430,50 @@ public class NvrSyncService {
         int rtspPort = device.getPort() != null ? device.getPort() : 554;
         int updatedCount = 0;
 
+        // Пытаемся получить статусы камер через API (опционально)
+        int httpPort = device.getHttpPort() != null ? device.getHttpPort() : 
+                      (device.getPort() != null ? device.getPort() : 80);
+        String baseUrl = String.format("http://%s:%d", device.getIp(), httpPort);
+        Map<Integer, String> cameraStates = dahuaApiClient.getCameraStates(baseUrl, username, password);
+        boolean hasCameraStates = cameraStates != null && !cameraStates.isEmpty();
+        log.debug("Fetched {} camera states for ChannelTitle sync (hasCameraStates={})", 
+                cameraStates.size(), hasCameraStates);
+        
+        if (!hasCameraStates) {
+            log.debug("No camera states received from Dahua API for device {} ({}). " +
+                    "Preserving existing nvr_status values.", 
+                    device.getId(), device.getName());
+        }
+
         // Создаём/обновляем все каналы из channelTitles (может быть любое количество)
         for (Map.Entry<Integer, String> entry : channelTitles.entrySet()) {
             int channelNumber = entry.getKey();
             String channelName = entry.getValue();
+            
+            // Определяем nvr_status и has_camera из cameraStates (если доступно)
+            // ВАЖНО: обновляем nvr_status только если получили реальные данные от API
+            String nvrStatus = null;
+            boolean hasCamera = false;
+            String connectionState = null;
+            
+            if (hasCameraStates && cameraStates.containsKey(channelNumber)) {
+                connectionState = cameraStates.get(channelNumber);
+                nvrStatus = mapConnectionStateToStatus(connectionState);
+                hasCamera = determineHasCameraFromState(connectionState);
+            } else {
+                // Если данных нет - сохраняем существующий статус или используем fallback
+                NvrCamera existingCamera = existingByChannelNo.get(channelNumber);
+                if (existingCamera != null && existingCamera.getNvrStatus() != null) {
+                    nvrStatus = existingCamera.getNvrStatus(); // Сохраняем существующий статус
+                    hasCamera = Boolean.TRUE.equals(existingCamera.getHasCamera()); // Сохраняем существующий has_camera
+                } else {
+                    // Для новых каналов используем fallback: камера считается реальной, если название не пустое 
+                    // и не дефолтное "Channel N"
+                    hasCamera = channelName != null && !channelName.isEmpty() && 
+                               !channelName.matches("Channel\\s*" + channelNumber);
+                    nvrStatus = "UNKNOWN";
+                }
+            }
             
             // Формируем RTSP URL: rtsp://{login}:{password}@{ip}:{rtspPort}/cam/realmonitor?channel={N}&subtype=1
             String rtspUrl = String.format("rtsp://%s:%s@%s:%d/cam/realmonitor?channel=%d&subtype=1",
@@ -327,20 +490,38 @@ public class NvrSyncService {
                         .rtspUrl(rtspUrl)
                         .enabled(true)
                         .isActive(false) // Будет обновлено после RTSP проверки
-                        .status("UNKNOWN")
+                        .status("UNKNOWN") // legacy поле
                         .statusUpdatedAt(now)
+                        .hasCamera(hasCamera)
+                        .nvrStatus(nvrStatus)
+                        .nvrStatusUpdatedAt(hasCameraStates ? now : null) // Обновляем timestamp только если получили данные
+                        // rtsp_status не трогаем - он обновляется отдельно
                         .createdAt(now)
                         .build();
                 updatedCount++;
-                log.debug("Creating channel {}: {}", channelNumber, channelName);
+                log.debug("Creating channel {}: {}, hasCamera={}, nvrStatus={}, hasCameraStates={}", 
+                        channelNumber, channelName, hasCamera, nvrStatus, hasCameraStates);
             } else {
                 // Обновляем существующий канал
                 camera.setName(channelName);
                 camera.setRtspUrl(rtspUrl);
-                // isActive будет обновлено после RTSP проверки
+                camera.setStatus("UNKNOWN"); // legacy поле
                 camera.setStatusUpdatedAt(now);
+                // Обновляем только nvr_status (не трогаем rtsp_status)
+                camera.setHasCamera(hasCamera);
+                // Обновляем nvr_status только если получили реальные данные от API
+                if (hasCameraStates) {
+                    camera.setNvrStatus(nvrStatus);
+                    camera.setNvrStatusUpdatedAt(now);
+                } else {
+                    // Сохраняем существующий статус, если данных от API нет
+                    log.debug("Preserving existing nvr_status={} for channel {} (no API data)", 
+                            camera.getNvrStatus(), channelNumber);
+                }
+                // rtsp_status не трогаем - он обновляется отдельно
                 updatedCount++;
-                log.debug("Updating channel {}: {}", channelNumber, channelName);
+                log.debug("Updating channel {}: {}, hasCamera={}, nvrStatus={}, hasCameraStates={}", 
+                        channelNumber, channelName, hasCamera, nvrStatus, hasCameraStates);
             }
 
             cameraRepo.save(camera);
@@ -350,12 +531,13 @@ public class NvrSyncService {
     }
 
     /**
-     * Проверяет RTSP доступность для всех каналов устройства.
+     * Проверяет RTSP доступность для каналов устройства.
      * Выполняется асинхронно для всех каналов параллельно.
+     * Обновляет только rtsp_status и rtsp_status_updated_at (не трогает nvr_status).
      * 
      * @param deviceId ID устройства
      */
-    private void checkRtspHealthForDevice(Long deviceId) {
+    public void checkRtspHealthForDevice(Long deviceId) {
         NvrDevice device = deviceRepo.findById(deviceId)
                 .orElse(null);
         
@@ -370,59 +552,143 @@ public class NvrSyncService {
             return;
         }
         
-        List<NvrCamera> channels = cameraRepo.findByDeviceId(deviceId);
+        // Проверяем только каналы с has_camera=true и непустым rtsp_url (реальные камеры)
+        List<NvrCamera> channels = cameraRepo.findByDeviceId(deviceId).stream()
+                .filter(c -> Boolean.TRUE.equals(c.getHasCamera()))
+                .filter(c -> c.getRtspUrl() != null && !c.getRtspUrl().trim().isEmpty())
+                .collect(Collectors.toList());
+        
         if (channels.isEmpty()) {
-            log.debug("No channels found for device {} to check RTSP", deviceId);
+            log.debug("No cameras (has_camera=true with RTSP URL) found for device {} to check RTSP", deviceId);
             return;
         }
         
-        log.debug("Starting RTSP health check for device {} ({} channels)", deviceId, channels.size());
+        log.info("Starting RTSP health check for device {} ({} cameras)", deviceId, channels.size());
         
-        // Создаём асинхронные задачи для проверки каждого канала
+        OffsetDateTime now = OffsetDateTime.now();
+        
+        // Таймауты: 5 секунд на канал, 60 секунд общий таймаут на устройство
+        final long PER_CHANNEL_TIMEOUT_SECONDS = 5;
+        final long TOTAL_TIMEOUT_SECONDS = 60;
+        
+        // Счётчики для агрегации ошибок
+        final int[] failedCount = {0};
+        final int[] timeoutCount = {0};
+        
+        // Создаём асинхронные задачи для проверки каждого канала с таймаутом
         List<CompletableFuture<Void>> futures = channels.stream()
-                .map(channel -> CompletableFuture.runAsync(() -> {
-                    String rtspUrl = channel.getRtspUrl();
-                    if (rtspUrl == null || rtspUrl.trim().isEmpty()) {
-                        log.debug("Channel {} has no RTSP URL, marking as offline", channel.getChannelNo());
-                        channel.setIsActive(false);
-                        channel.setStatus("OFFLINE");
-                        channel.setStatusUpdatedAt(OffsetDateTime.now());
-                        return;
-                    }
-                    
-                    boolean isOnline = rtspHealthChecker.isOnline(rtspUrl);
-                    channel.setIsActive(isOnline);
-                    channel.setStatus(isOnline ? "ONLINE" : "OFFLINE");
-                    channel.setStatusUpdatedAt(OffsetDateTime.now());
-                }, rtspCheckExecutor))
+                .map(channel -> {
+                    final NvrCamera channelFinal = channel; // final для использования в лямбде
+                    return CompletableFuture.runAsync(() -> {
+                        String rtspUrl = channelFinal.getRtspUrl();
+                        try {
+                            boolean isOnline = rtspHealthChecker.isOnline(rtspUrl);
+                            // Обновляем только rtsp_status (не трогаем nvr_status)
+                            channelFinal.setRtspStatus(isOnline ? "OK" : "FAIL");
+                            channelFinal.setRtspStatusUpdatedAt(now);
+                            // Legacy поля для обратной совместимости
+                            channelFinal.setIsActive(isOnline);
+                            channelFinal.setStatus(isOnline ? "ONLINE" : "OFFLINE");
+                            channelFinal.setStatusUpdatedAt(now);
+                            if (!isOnline) {
+                                synchronized (failedCount) {
+                                    failedCount[0]++;
+                                }
+                            }
+                        } catch (Exception e) {
+                            log.debug("RTSP check failed for channel {} (device {}): {}", 
+                                    channelFinal.getChannelNo(), deviceId, e.getMessage());
+                            synchronized (failedCount) {
+                                failedCount[0]++;
+                            }
+                            channelFinal.setRtspStatus("FAIL");
+                            channelFinal.setRtspStatusUpdatedAt(now);
+                            channelFinal.setIsActive(false);
+                            channelFinal.setStatus("OFFLINE");
+                            channelFinal.setStatusUpdatedAt(now);
+                        }
+                    }, rtspCheckExecutor)
+                    .orTimeout(PER_CHANNEL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+                    .exceptionally(ex -> {
+                        if (ex instanceof java.util.concurrent.TimeoutException) {
+                            log.debug("RTSP check timeout for channel {} (device {})", 
+                                    channelFinal.getChannelNo(), deviceId);
+                            synchronized (timeoutCount) {
+                                timeoutCount[0]++;
+                            }
+                        }
+                        synchronized (failedCount) {
+                            failedCount[0]++;
+                        }
+                        return null;
+                    });
+                })
                 .collect(Collectors.toList());
         
-        // Ждём завершения всех проверок
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+        // Ждём завершения всех проверок с общим таймаутом
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                    .get(TOTAL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            log.warn("RTSP health check timeout for device {} after {} seconds ({} channels checked)", 
+                    deviceId, TOTAL_TIMEOUT_SECONDS, channels.size());
+        } catch (Exception e) {
+            log.error("RTSP health check error for device {}: {}", deviceId, e.getMessage(), e);
+        }
         
         // Сохраняем обновлённые каналы
         cameraRepo.saveAll(channels);
         
         long onlineCount = channels.stream()
-                .filter(c -> Boolean.TRUE.equals(c.getIsActive()))
+                .filter(c -> "OK".equals(c.getRtspStatus()))
                 .count();
         
-        log.debug("RTSP health check for device {}: {} online / {} total",
+        // Агрегированное логирование ошибок
+        if (failedCount[0] > 0 || timeoutCount[0] > 0) {
+            log.warn("RTSP health check for device {}: {} online / {} total, {} failed, {} timeouts", 
+                    deviceId, onlineCount, channels.size(), failedCount[0], timeoutCount[0]);
+        }
+        
+        log.info("RTSP health check completed for device {}: {} online / {} total",
                 deviceId, onlineCount, channels.size());
     }
 
     /**
      * Преобразует состояние подключения камеры в статус.
+     * 
+     * Возможные значения connectionState:
+     * - Connected → ONLINE
+     * - Unconnect, Disconnected → OFFLINE
+     * - Connecting, UnInited, Hibernation → UNKNOWN
+     * - Empty, Disable → UNKNOWN (но канал будет HIDDEN через has_camera=false)
      */
     private String mapConnectionStateToStatus(String connectionState) {
         if (connectionState == null) {
             return "UNKNOWN";
         }
-        return switch (connectionState.toLowerCase()) {
+        String stateLower = connectionState.toLowerCase();
+        return switch (stateLower) {
             case "connected" -> "ONLINE";
             case "unconnect", "disconnected" -> "OFFLINE";
+            case "connecting", "uninited", "hibernation" -> "UNKNOWN";
+            case "empty", "disable" -> "UNKNOWN"; // Будет скрыт через has_camera=false
             default -> "UNKNOWN";
         };
+    }
+
+    /**
+     * Определяет, есть ли реальная камера на канале на основе connectionState.
+     * 
+     * @param connectionState состояние подключения камеры из Dahua API
+     * @return true если камера реальная, false если канал пустой/отключён
+     */
+    private boolean determineHasCameraFromState(String connectionState) {
+        if (connectionState == null) {
+            return false; // Если состояния нет, считаем канал пустым
+        }
+        String stateLower = connectionState.toLowerCase();
+        // Empty и Disable означают, что канал не сконфигурирован или отключён
+        return !stateLower.equals("empty") && !stateLower.equals("disable");
     }
 
     /**

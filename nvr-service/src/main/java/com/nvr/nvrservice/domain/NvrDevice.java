@@ -57,6 +57,9 @@ public class NvrDevice {
     @Builder.Default
     private Integer camerasCount = 0;
 
+    @Column(name = "max_channels")
+    private Integer maxChannels;
+
     @Builder.Default
     @Column(nullable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();

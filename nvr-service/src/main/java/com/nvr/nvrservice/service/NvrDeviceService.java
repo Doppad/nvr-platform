@@ -84,6 +84,7 @@ public class NvrDeviceService {
                 dev.getCreatedAt(),
 
                 camerasCount,
+                dev.getMaxChannels(), // Максимальное количество каналов
                 viewer.getUsername(),
                 decryptedPass,
 
@@ -327,24 +328,32 @@ public class NvrDeviceService {
                     dto.setChannelNo(camera.getChannelNo()); // alias
                     dto.setName(camera.getName());
                     dto.setRtspUrl(camera.getRtspUrl());
-                    // Маппинг active из isActive (проверяется через RTSP)
-                    boolean isActive = camera.getIsActive() != null ? camera.getIsActive() : false;
-                    dto.setActive(isActive);
-                    dto.setIsActive(isActive); // alias
                     
-                    // Вычисляем visible: канал видим, если он активен ИЛИ имеет нестандартное имя
-                    // Правила:
-                    // - Если канал ONLINE (active = true) → всегда видим
-                    // - Если канал OFFLINE (active = false) И имя = "Channel" + номер → скрываем (пустой канал)
-                    // - Если канал OFFLINE (active = false) И имя != "Channel" + номер → показываем (реальная камера, просто оффлайн)
-                    String channelName = camera.getName();
-                    boolean isDefaultName = channelName != null && channelName.matches("Channel\\d+");
-                    boolean visible = isActive || !isDefaultName;
-                    dto.setVisible(visible);
+                    // Новые поля статусов
+                    Boolean hasCamera = camera.getHasCamera() != null ? camera.getHasCamera() : false;
+                    dto.setHasCamera(hasCamera);
+                    
+                    String nvrStatus = camera.getNvrStatus() != null ? camera.getNvrStatus() : "UNKNOWN";
+                    dto.setNvrStatus(nvrStatus);
+                    
+                    String rtspStatus = camera.getRtspStatus() != null ? camera.getRtspStatus() : "NONE";
+                    dto.setRtspStatus(rtspStatus);
+                    
+                    // Вычисляем uiStatus по новым правилам
+                    String uiStatus = computeUiStatus(hasCamera, nvrStatus, rtspStatus);
+                    dto.setUiStatus(uiStatus);
+                    
+                    // visible = has_camera (пустые каналы всегда скрыты)
+                    dto.setVisible(hasCamera);
+                    
+                    // Legacy поля для обратной совместимости
+                    boolean isActive = "ONLINE".equals(uiStatus);
+                    dto.setActive(isActive);
+                    dto.setIsActive(isActive);
+                    dto.setStatus(camera.getStatus()); // legacy поле
                     
                     // Дополнительные поля
                     dto.setId(camera.getId());
-                    dto.setStatus(camera.getStatus());
                     dto.setIpAddress(camera.getIpAddress());
                     dto.setPort(camera.getPort());
                     dto.setDeviceName(camera.getDeviceName());
@@ -354,6 +363,46 @@ public class NvrDeviceService {
                     return dto;
                 })
                 .toList();
+    }
+
+    /**
+     * Вычисляет UI статус канала на основе has_camera, nvr_status и rtsp_status.
+     * 
+     * Правила:
+     * - Если has_camera == false → HIDDEN
+     * - Если has_camera == true:
+     *   - если nvr_status==ONLINE и rtsp_status==OK → ONLINE
+     *   - если nvr_status==ONLINE и rtsp_status!=OK → ONLINE_NO_STREAM
+     *   - если nvr_status==OFFLINE → OFFLINE
+     *   - если nvr_status==UNKNOWN и rtsp_status==OK → ONLINE (защитное поведение: RTSP работает)
+     *   - если nvr_status==UNKNOWN и rtsp_status==FAIL → OFFLINE (защитное поведение: RTSP не работает)
+     *   - иначе → UNKNOWN
+     */
+    private String computeUiStatus(Boolean hasCamera, String nvrStatus, String rtspStatus) {
+        if (hasCamera == null || !hasCamera) {
+            return "HIDDEN";
+        }
+        
+        if ("ONLINE".equals(nvrStatus)) {
+            if ("OK".equals(rtspStatus)) {
+                return "ONLINE";
+            } else {
+                return "ONLINE_NO_STREAM";
+            }
+        } else if ("OFFLINE".equals(nvrStatus)) {
+            return "OFFLINE";
+        } else if ("UNKNOWN".equals(nvrStatus)) {
+            // Защитное поведение: если nvr_status неизвестен, используем rtsp_status
+            if ("OK".equals(rtspStatus)) {
+                return "ONLINE"; // RTSP работает - считаем камеру онлайн
+            } else if ("FAIL".equals(rtspStatus)) {
+                return "OFFLINE"; // RTSP не работает - считаем камеру оффлайн
+            } else {
+                return "UNKNOWN"; // RTSP статус тоже неизвестен
+            }
+        } else {
+            return "UNKNOWN";
+        }
     }
 
     @Transactional

@@ -29,6 +29,9 @@
         }
         .status-online { background: #16a34a; }  /* зелёный */
         .status-offline { background: #dc2626; } /* красный */
+        .status-online-no-stream { background: #f59e0b; } /* оранжевый - онлайн но нет потока */
+        .status-unknown { background: #6b7280; } /* серый - неизвестно */
+        .status-hidden { background: #d1d5db; } /* светло-серый - скрыт */
         .channels-row td {
             background: #f9fafb;
             border-top: none;
@@ -79,6 +82,12 @@
         .channel-card.inactive {
             opacity: 0.6;
             background: #f9fafb;
+        }
+        /* Специальный стиль для ONLINE_NO_STREAM (warning) */
+        .channel-card.warning {
+            border-color: #f59e0b;
+            background: #fffbeb;
+            opacity: 1;
         }
         .channel-card .channel-name {
             font-weight: 600;
@@ -363,7 +372,8 @@
             visibleChannels.forEach(channel => {
                 const channelNumber = channel.channelNumber || channel.channelNo || 0;
                 const name = channel.name || `Channel${channelNumber}`;
-                const active = channel.active !== undefined ? channel.active : (channel.isActive !== undefined ? channel.isActive : false);
+                // Используем новый uiStatus, если доступен, иначе fallback на active
+                const uiStatus = channel.uiStatus || (channel.active ? 'ONLINE' : 'OFFLINE');
                 const rtspUrl = channel.rtspUrl || '';
                 
                 // Формируем URL для скриншота Dahua
@@ -373,17 +383,51 @@
                     ? `http://${encodeURIComponent(viewerLogin)}:${encodeURIComponent(viewerPassword)}@${deviceIp}:${httpPort}/cgi-bin/snapshot.cgi?channel=${channelNumber}`
                     : '';
                 
-                const card = document.createElement('div');
-                card.className = `channel-card ${active ? 'active' : 'inactive'}`;
+                // Определяем класс карточки и статус на основе uiStatus
+                let cardClass = 'channel-card';
+                let statusDotClass = 'status-dot';
+                let statusText = '';
                 
-                const statusDot = active ? 'status-online' : 'status-offline';
-                const statusText = active ? 'Online' : 'Offline';
+                switch(uiStatus.toUpperCase()) {
+                    case 'ONLINE':
+                        cardClass += ' active';
+                        statusDotClass += ' status-online';
+                        statusText = 'Online';
+                        break;
+                    case 'ONLINE_NO_STREAM':
+                        cardClass += ' warning'; // Используем класс warning вместо inactive
+                        statusDotClass += ' status-online-no-stream';
+                        statusText = 'Online (нет потока)';
+                        break;
+                    case 'OFFLINE':
+                        cardClass += ' inactive';
+                        statusDotClass += ' status-offline';
+                        statusText = 'Offline';
+                        break;
+                    case 'HIDDEN':
+                        cardClass += ' inactive';
+                        statusDotClass += ' status-hidden';
+                        statusText = 'Скрыт';
+                        break;
+                    default:
+                        cardClass += ' inactive';
+                        statusDotClass += ' status-unknown';
+                        statusText = 'Неизвестно';
+                }
+                
+                const card = document.createElement('div');
+                card.className = cardClass;
+                
+                // Добавляем tooltip для ONLINE_NO_STREAM
+                const tooltipAttr = uiStatus === 'ONLINE_NO_STREAM' 
+                    ? 'title="Камера подключена к NVR, но видеопоток недоступен. Скрин может работать по HTTP. Это не ошибка камеры."'
+                    : '';
                 
                 card.innerHTML = `
                     <div class="channel-number">CH ${channelNumber}</div>
                     <div class="channel-name">${name}</div>
-                    <div class="channel-status">
-                        <span class="status-dot ${statusDot}"></span>
+                    <div class="channel-status" ${tooltipAttr}>
+                        <span class="${statusDotClass}"></span>
                         <span>${statusText}</span>
                     </div>
                     ${snapshotUrl ? `<button type="button" class="btn-link" onclick="window.open('${snapshotUrl}', '_blank')" style="margin: 4px 0; display: block;">Просмотр скрина</button>` : ''}
@@ -435,21 +479,35 @@
             if (!res.ok) return null;
             const channels = await res.json();
             
-            const total = channels.length;
-            const visible = channels.filter(ch => ch.visible !== false).length;
-            const online = channels.filter(ch => {
-                const active = ch.active !== undefined ? ch.active : (ch.isActive !== undefined ? ch.isActive : false);
-                return active;
-            }).length;
-            const hidden = total - visible;
-            const offline = visible - online;
-            const errors = channels.filter(ch => {
-                const active = ch.active !== undefined ? ch.active : (ch.isActive !== undefined ? ch.isActive : false);
-                const visible = ch.visible !== false;
-                return visible && !active; // видимые, но оффлайн = ошибка
+            // Фильтруем только видимые каналы (has_camera=true) для статистики
+            const visibleChannels = channels.filter(ch => ch.visible !== false);
+            const hiddenChannels = channels.filter(ch => ch.visible === false);
+            
+            const total = visibleChannels.length; // Только видимые каналы
+            const hidden = hiddenChannels.length;
+            
+            // Используем uiStatus для подсчёта статусов (только для видимых каналов)
+            const online = visibleChannels.filter(ch => {
+                const uiStatus = ch.uiStatus || (ch.active ? 'ONLINE' : 'OFFLINE');
+                return uiStatus === 'ONLINE';
             }).length;
             
-            return { total, online, hidden, errors, offline };
+            const warning = visibleChannels.filter(ch => {
+                const uiStatus = ch.uiStatus || (ch.active ? 'ONLINE' : 'OFFLINE');
+                return uiStatus === 'ONLINE_NO_STREAM';
+            }).length;
+            
+            const offline = visibleChannels.filter(ch => {
+                const uiStatus = ch.uiStatus || (ch.active ? 'ONLINE' : 'OFFLINE');
+                return uiStatus === 'OFFLINE';
+            }).length;
+            
+            // Ошибки: только видимые каналы, которые оффлайн
+            // ONLINE_NO_STREAM НЕ считается ошибкой (это warning)
+            // Hidden каналы НЕ учитываются в ошибках
+            const errors = offline; // errors = только OFFLINE
+            
+            return { total, online, warning, hidden, errors, offline };
         } catch (error) {
             console.error('Error loading channels stats:', error);
             return null;
@@ -481,18 +539,23 @@
                     : 'status-dot';
 
             // Формируем строку статистики камер
-            let camsText = d.camerasCount ?? '0';
+            // maxChannels берём из device.maxChannels, иначе из stats.total (включая hidden), иначе fallback
+            const maxChannels = d.maxChannels ?? (stats ? (stats.total + stats.hidden) : null) ?? (d.camerasCount ?? 0);
+            let camsText = maxChannels.toString();
             let camsClass = '';
             let errorBadge = '';
             
             if (stats) {
-                const { total, online, hidden, errors } = stats;
+                const { total, online, warning, hidden, errors, offline } = stats;
+                // Формат: maxChannels / online (+warning) / offline
+                // Например: 32 / 13 (+5) / 2 → 13 online, 5 warning (ONLINE_NO_STREAM), 2 offline (errors)
+                const warningPart = warning > 0 ? ` (+${warning})` : '';
                 if (errors > 0) {
-                    camsText = `${total}/${online}(+${hidden})/${errors}`;
+                    camsText = `${maxChannels} / ${online}${warningPart} / ${offline}`;
                     camsClass = 'cams-stats has-error';
                     errorBadge = `<span class="error-badge">${errors} ошибок</span>`;
                 } else {
-                    camsText = `${total}/${online}(+${hidden})/0`;
+                    camsText = `${maxChannels} / ${online}${warningPart} / 0`;
                     camsClass = 'cams-stats';
                 }
             }
@@ -518,6 +581,7 @@
                 <td>${d.viewerLogin ?? ''}</td>
                 <td>
                     <button type="button" class="btn-link" data-toggle-channels="${d.id}">Каналы</button>
+                    <button type="button" class="btn-link" data-sync-device="${d.id}" style="margin-left: 8px;" title="Синхронизировать каналы">🔄</button>
                     <button type="button" class="danger" data-delete-id="${d.id}">Удалить</button>
                 </td>
             `;
@@ -532,27 +596,40 @@
             const col = document.createElement('td');
             col.colSpan = 10;
 
-            const cams = d.camerasCount ?? 0;
-            if (cams > 0) {
+            // Используем уже определённый maxChannels выше
+            if (maxChannels > 0) {
                 const wrapper = document.createElement('div');
                 wrapper.className = 'hint';
                 wrapper.textContent = 'Каналы:';
 
-                // Показываем ошибки даже в collapsed состоянии
-                if (stats && stats.errors > 0) {
-                    const errorInfo = document.createElement('div');
-                    errorInfo.style.color = '#dc2626';
-                    errorInfo.style.fontWeight = '600';
-                    errorInfo.style.marginTop = '8px';
-                    errorInfo.style.padding = '8px';
-                    errorInfo.style.background = '#fef2f2';
-                    errorInfo.style.borderRadius = '6px';
-                    errorInfo.textContent = `⚠️ Обнаружено ${stats.errors} камер с ошибками (оффлайн)`;
-                    col.appendChild(errorInfo);
+                // Показываем ошибки и предупреждения даже в collapsed состоянии
+                if (stats && (stats.errors > 0 || stats.warning > 0)) {
+                    if (stats.errors > 0) {
+                        const errorInfo = document.createElement('div');
+                        errorInfo.style.color = '#dc2626';
+                        errorInfo.style.fontWeight = '600';
+                        errorInfo.style.marginTop = '8px';
+                        errorInfo.style.padding = '8px';
+                        errorInfo.style.background = '#fef2f2';
+                        errorInfo.style.borderRadius = '6px';
+                        errorInfo.textContent = `⚠️ Обнаружено ${stats.errors} камер с ошибками (оффлайн)`;
+                        col.appendChild(errorInfo);
+                    }
+                    if (stats.warning > 0) {
+                        const warningInfo = document.createElement('div');
+                        warningInfo.style.color = '#f59e0b';
+                        warningInfo.style.fontWeight = '600';
+                        warningInfo.style.marginTop = '8px';
+                        warningInfo.style.padding = '8px';
+                        warningInfo.style.background = '#fffbeb';
+                        warningInfo.style.borderRadius = '6px';
+                        warningInfo.textContent = `⚠️ ${stats.warning} камер онлайн, но без видеопотока (не ошибка)`;
+                        col.appendChild(warningInfo);
+                    }
                 }
 
                 // Для всех устройств Dahua показываем сетку с загрузкой каналов через API
-                if (d.vendor === 'Dahua' && cams > 0) {
+                if (d.vendor === 'Dahua' && maxChannels > 0) {
                     const gridContainer = document.createElement('div');
                     const grid = document.createElement('div');
                     grid.className = 'channels-grid';
@@ -565,7 +642,7 @@
                 } else {
                     // Старый формат для других устройств
                     const list = document.createElement('div');
-                    for (let ch = 1; ch <= cams; ch++) {
+                    for (let ch = 1; ch <= maxChannels; ch++) {
                         const pill = document.createElement('span');
                         pill.className = 'channel-pill';
                         pill.innerHTML = `
@@ -714,6 +791,40 @@
             const row = document.querySelector(`tr.channels-row[data-parent-id="${id}"]`);
             if (row) {
                 row.style.display = row.style.display === 'none' ? '' : 'none';
+            }
+            return;
+        }
+
+        // синхронизация устройства
+        const syncBtn = target.closest('button[data-sync-device]');
+        if (syncBtn) {
+            const deviceId = syncBtn.getAttribute('data-sync-device');
+            syncBtn.disabled = true;
+            syncBtn.textContent = '⏳';
+            try {
+                const res = await fetch(`${base}/admin/api/devices/${deviceId}/sync`, {
+                    method: 'POST',
+                    headers: getAdminHeaders()
+                });
+                if (res.ok) {
+                    const result = await res.json();
+                    alert(`Синхронизация завершена: ${result.message || 'OK'}`);
+                    // Перезагружаем каналы, если они открыты
+                    const row = document.querySelector(`tr.channels-row[data-parent-id="${deviceId}"]`);
+                    if (row && row.style.display !== 'none') {
+                        loadChannelsForDevice(Number(deviceId));
+                    }
+                    // Перезагружаем список устройств для обновления статистики
+                    loadDevices();
+                } else {
+                    const text = await res.text();
+                    alert('Ошибка синхронизации: ' + text);
+                }
+            } catch (error) {
+                alert('Ошибка синхронизации: ' + error.message);
+            } finally {
+                syncBtn.disabled = false;
+                syncBtn.textContent = '🔄';
             }
             return;
         }

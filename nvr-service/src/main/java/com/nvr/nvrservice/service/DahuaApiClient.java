@@ -58,14 +58,14 @@ public class DahuaApiClient {
             
             // Проверяем, что ответ не пустой и не HTML
             if (response == null || response.trim().isEmpty()) {
-                log.warn("Empty response from ChannelTitle endpoint at {} (endpoint: {})", baseUrl, endpoint);
+                log.debug("Empty response from ChannelTitle endpoint at {} (endpoint: {})", baseUrl, endpoint);
                 return Collections.emptyMap();
             }
             
             String trimmedResponse = response.trim();
             if (trimmedResponse.startsWith("<!") || trimmedResponse.startsWith("<html") || 
                 trimmedResponse.startsWith("<HTML")) {
-                log.warn("Received HTML instead of INI from ChannelTitle at {} (endpoint: {}). " +
+                log.debug("Received HTML instead of INI from ChannelTitle at {} (endpoint: {}). " +
                         "Response preview: {}", baseUrl, endpoint, truncate(response, 200));
                 return Collections.emptyMap();
             }
@@ -106,7 +106,7 @@ public class DahuaApiClient {
             
             // Проверяем, что ответ не пустой и не HTML
             if (response == null || response.trim().isEmpty()) {
-                log.warn("Empty response from Dahua device at {} (endpoint: {})", baseUrl, endpoint);
+                log.debug("Empty response from Dahua device at {} (endpoint: {})", baseUrl, endpoint);
                 return Collections.emptyList();
             }
             
@@ -114,7 +114,7 @@ public class DahuaApiClient {
             String trimmedResponse = response.trim();
             if (trimmedResponse.startsWith("<!") || trimmedResponse.startsWith("<html") || 
                 trimmedResponse.startsWith("<HTML")) {
-                log.warn("Received HTML instead of INI from Dahua device at {} (endpoint: {}). " +
+                log.debug("Received HTML instead of INI from Dahua device at {} (endpoint: {}). " +
                         "Response preview: {}", baseUrl, endpoint, truncate(response, 200));
                 return Collections.emptyList();
             }
@@ -123,7 +123,7 @@ public class DahuaApiClient {
             List<DahuaChannelDto> channels = parseChannelsFromIni(response);
             
             if (channels.isEmpty()) {
-                log.warn("Parsed 0 channels from Dahua device at {} (endpoint: {}). " +
+                log.debug("Parsed 0 channels from Dahua device at {} (endpoint: {}). " +
                         "Response preview: {}", baseUrl, endpoint, truncate(response, 300));
             }
             
@@ -140,6 +140,49 @@ public class DahuaApiClient {
     }
 
     /**
+     * Получает максимальное количество удалённых входных каналов (MaxRemoteInputChannels) из Dahua устройства.
+     *
+     * @param baseUrl  базовый URL устройства
+     * @param username имя пользователя
+     * @param password пароль
+     * @return максимальное количество каналов (16, 32, 64 и т.д.), или null если не удалось получить
+     */
+    public Integer getMaxRemoteInputChannels(String baseUrl, String username, String password) {
+        String endpoint = baseUrl + "/cgi-bin/magicBox.cgi?action=getProductDefinition&name=MaxRemoteInputChannels";
+        
+        try {
+            URI uri = URI.create(endpoint);
+            String response = digestHttpClient.executeDigestGet(uri, username, password);
+            
+            if (response == null || response.trim().isEmpty()) {
+                log.debug("Empty response from MaxRemoteInputChannels at {}", baseUrl);
+                return null;
+            }
+            
+            // Формат ответа: table.MaxRemoteInputChannels=16 или table.MaxRemoteInputChannels=32|64...
+            Pattern pattern = Pattern.compile("table\\.MaxRemoteInputChannels=(\\d+)");
+            Matcher matcher = pattern.matcher(response);
+            
+            if (matcher.find()) {
+                String value = matcher.group(1);
+                // Если значение содержит |, берём первое число
+                if (value.contains("|")) {
+                    value = value.split("\\|")[0];
+                }
+                int maxChannels = Integer.parseInt(value);
+                log.debug("Retrieved MaxRemoteInputChannels={} from device {}", maxChannels, baseUrl);
+                return maxChannels;
+            }
+            
+            log.debug("Could not parse MaxRemoteInputChannels from response: {}", truncate(response, 200));
+            return null;
+        } catch (Exception e) {
+            log.debug("Failed to fetch MaxRemoteInputChannels from {}: {}", baseUrl, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Получает состояние камер (ONLINE/OFFLINE).
      *
      * @param baseUrl  базовый URL устройства
@@ -149,44 +192,76 @@ public class DahuaApiClient {
      *         Пустая Map, если произошла ошибка или ответ некорректный
      */
     public Map<Integer, String> getCameraStates(String baseUrl, String username, String password) {
-        String endpoint = baseUrl + "/cgi-bin/api/LogicDeviceManager/getCameraState";
-
+        // Пробуем несколько вариантов endpoints
+        String[] endpoints = {
+            baseUrl + "/cgi-bin/api/LogicDeviceManager/getCameraStates", // Множественное число
+            baseUrl + "/cgi-bin/api/LogicDeviceManager/getCameraState",  // Единственное число (текущий)
+            baseUrl + "/cgi-bin/devVideoInput.cgi?action=getCameraState", // Альтернативный через devVideoInput
+        };
+        
         String jsonBody = "{\"uniqueChannels\":[-1]}";
-        try {
-            URI uri;
+        
+        for (String endpoint : endpoints) {
             try {
-                uri = URI.create(endpoint);
-            } catch (IllegalArgumentException e) {
-                log.error("Invalid URI format for endpoint {}: {}", endpoint, e.getMessage());
-                return Collections.emptyMap();
+                URI uri;
+                try {
+                    uri = URI.create(endpoint);
+                } catch (IllegalArgumentException e) {
+                    log.warn("Invalid URI format for endpoint {}: {}", endpoint, e.getMessage());
+                    continue; // Пробуем следующий endpoint
+                }
+                
+                log.debug("Trying to fetch camera states from endpoint: {}", endpoint);
+                String response = digestHttpClient.executeDigestPostJson(uri, username, password, jsonBody);
+                
+                // Проверяем, что ответ не пустой и не HTML
+                if (response == null || response.trim().isEmpty()) {
+                    log.debug("Empty response from {} (endpoint: {}), trying next endpoint", baseUrl, endpoint);
+                    continue;
+                }
+                
+                String trimmedResponse = response.trim();
+                if (trimmedResponse.startsWith("<!") || trimmedResponse.startsWith("<html") || 
+                    trimmedResponse.startsWith("<HTML")) {
+                    log.debug("Received HTML instead of JSON from {} (endpoint: {}). " +
+                            "Response preview: {}, trying next endpoint", baseUrl, endpoint, truncate(response, 200));
+                    continue;
+                }
+                
+                log.debug("Raw response from getCameraState: {}", truncate(response, 500));
+                Map<Integer, String> states = parseCameraStatesFromJson(response);
+                if (!states.isEmpty()) {
+                    log.debug("Successfully fetched camera states from endpoint: {} (parsed {} states)", 
+                            endpoint, states.size());
+                    return states;
+                }
+                log.debug("Parsed empty states from {} (endpoint: {}). Response preview: {}. Trying next endpoint", 
+                        baseUrl, endpoint, truncate(response, 300));
+            } catch (IOException e) {
+                // Понижаем уровень логов для ожидаемых ошибок (400, 501) → DEBUG
+                String errorMessage = e.getMessage();
+                if (errorMessage != null && (errorMessage.contains("400") || errorMessage.contains("501"))) {
+                    log.debug("HTTP {} from Dahua device at {} (endpoint: {}). Trying next endpoint.", 
+                            errorMessage.contains("400") ? "400" : "501", baseUrl, endpoint);
+                } else if (errorMessage != null && errorMessage.contains("403")) {
+                    log.debug("HTTP 403 Forbidden from Dahua device at {} (endpoint: {}). Trying next endpoint.", 
+                            baseUrl, endpoint);
+                } else {
+                    log.debug("Failed to fetch camera states from {} (endpoint: {}): {}. Trying next endpoint.",
+                            baseUrl, endpoint, errorMessage);
+                }
+                continue; // Пробуем следующий endpoint
+            } catch (Exception e) {
+                log.debug("Unexpected error while fetching camera states from {} (endpoint: {}): {}. Trying next endpoint.",
+                        baseUrl, endpoint, e.getMessage());
+                continue; // Пробуем следующий endpoint
             }
-            String response = digestHttpClient.executeDigestPostJson(uri, username, password, jsonBody);
-            
-            // Проверяем, что ответ не пустой и не HTML
-            if (response == null || response.trim().isEmpty()) {
-                log.warn("Empty response from getCameraState at {} (endpoint: {})", baseUrl, endpoint);
-                return Collections.emptyMap();
-            }
-            
-            String trimmedResponse = response.trim();
-            if (trimmedResponse.startsWith("<!") || trimmedResponse.startsWith("<html") || 
-                trimmedResponse.startsWith("<HTML")) {
-                log.warn("Received HTML instead of JSON from getCameraState at {} (endpoint: {}). " +
-                        "Response preview: {}", baseUrl, endpoint, truncate(response, 200));
-                return Collections.emptyMap();
-            }
-            
-            log.debug("Raw response from getCameraState: {}", truncate(response, 500));
-            return parseCameraStatesFromJson(response);
-        } catch (IOException e) {
-            log.error("Failed to fetch camera states from Dahua device at {} (endpoint: {}): {}",
-                    baseUrl, endpoint, e.getMessage());
-            return Collections.emptyMap();
-        } catch (Exception e) {
-            log.error("Unexpected error while fetching camera states from Dahua device at {} (endpoint: {}): {}",
-                    baseUrl, endpoint, e.getMessage(), e);
-            return Collections.emptyMap();
         }
+        
+        // Если все endpoints не сработали - это деградация, но не ошибка
+        log.debug("Failed to fetch camera states from Dahua device at {} using all tried endpoints. " +
+                "Camera states will not be updated to preserve existing nvr_status values.", baseUrl);
+        return Collections.emptyMap();
     }
 
     /**
@@ -273,6 +348,10 @@ public class DahuaApiClient {
      *     ...
      *   ]
      * }
+     * 
+     * ВАЖНО: Dahua часто возвращает uniqueChannel в 0-based формате (0..15),
+     * а наша система использует 1-based (1..16). Метод автоматически определяет
+     * формат и нормализует номера каналов к 1-based.
      */
     private Map<Integer, String> parseCameraStatesFromJson(String jsonContent) {
         Map<Integer, String> states = new HashMap<>();
@@ -281,31 +360,76 @@ public class DahuaApiClient {
             JsonNode root = objectMapper.readTree(jsonContent);
             JsonNode statesArray = root.get("states");
 
+            List<Integer> rawChannels = new ArrayList<>();
+            List<Map.Entry<Integer, String>> rawPairs = new ArrayList<>();
+
             if (statesArray != null && statesArray.isArray()) {
                 for (JsonNode stateNode : statesArray) {
-                    JsonNode uniqueChannelNode = stateNode.get("uniqueChannel");
+                    // Поддерживаем оба варианта: channel и uniqueChannel
+                    JsonNode channelNode = stateNode.get("channel");
+                    if (channelNode == null) {
+                        channelNode = stateNode.get("uniqueChannel");
+                    }
                     JsonNode connectionStateNode = stateNode.get("connectionState");
 
-                    if (uniqueChannelNode != null && connectionStateNode != null) {
-                        int channelNo = uniqueChannelNode.asInt();
+                    if (channelNode != null && connectionStateNode != null) {
+                        int uc = channelNode.asInt();
                         String state = connectionStateNode.asText();
-                        states.put(channelNo, state);
+                        rawChannels.add(uc);
+                        rawPairs.add(new java.util.AbstractMap.SimpleEntry<>(uc, state));
                     }
                 }
             }
 
-            log.debug("Parsed {} camera states from JSON response", states.size());
+            // Определяем формат: если есть 0, значит 0-based и нужно добавить +1
+            boolean zeroBased = rawChannels.contains(0);
+            
+            // Нормализуем номера каналов к 1-based формату
+            for (var p : rawPairs) {
+                int channelNo = zeroBased ? (p.getKey() + 1) : p.getKey();
+                states.put(channelNo, p.getValue());
+            }
+
+            if (states.isEmpty()) {
+                log.debug("Parsed 0 camera states from JSON. Raw response preview: {}", 
+                        truncate(jsonContent, 500));
+            } else {
+                log.debug("Parsed camera states size={}, zeroBased={}, sampleKeys={}",
+                        states.size(), zeroBased, 
+                        states.keySet().stream().sorted().limit(10).toList());
+            }
         } catch (Exception e) {
             log.error("Failed to parse camera states JSON: {}", e.getMessage(), e);
             // Fallback на regex парсинг, если JSON некорректный
-            Pattern statePattern = Pattern.compile(
-                    "\"uniqueChannel\"\\s*:\\s*(\\d+).*?\"connectionState\"\\s*:\\s*\"([^\"]+)\""
+            // Поддерживаем оба варианта: channel и uniqueChannel
+            Pattern statePattern1 = Pattern.compile(
+                    "\"(?:channel|uniqueChannel)\"\\s*:\\s*(\\d+).*?\"connectionState\"\\s*:\\s*\"([^\"]+)\""
             );
-            Matcher matcher = statePattern.matcher(jsonContent);
+            Matcher matcher = statePattern1.matcher(jsonContent);
+            List<Integer> rawChannels = new ArrayList<>();
+            List<Map.Entry<Integer, String>> rawPairs = new ArrayList<>();
+            
             while (matcher.find()) {
-                int channelNo = Integer.parseInt(matcher.group(1));
+                int uc = Integer.parseInt(matcher.group(1));
                 String state = matcher.group(2);
-                states.put(channelNo, state);
+                rawChannels.add(uc);
+                rawPairs.add(new java.util.AbstractMap.SimpleEntry<>(uc, state));
+            }
+            
+            // Применяем ту же нормализацию для fallback парсинга
+            boolean zeroBased = rawChannels.contains(0);
+            for (var p : rawPairs) {
+                int channelNo = zeroBased ? (p.getKey() + 1) : p.getKey();
+                states.put(channelNo, p.getValue());
+            }
+            
+            if (states.isEmpty()) {
+                log.debug("Parsed 0 camera states via regex fallback. Raw response preview: {}", 
+                        truncate(jsonContent, 500));
+            } else {
+                log.debug("Parsed camera states via regex fallback: size={}, zeroBased={}, sampleKeys={}",
+                        states.size(), zeroBased,
+                        states.keySet().stream().sorted().limit(10).toList());
             }
         }
 
@@ -359,4 +483,5 @@ public class DahuaApiClient {
         return str.substring(0, maxLength) + "...";
     }
 }
+
 

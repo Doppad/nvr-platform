@@ -168,11 +168,19 @@ public class DahuaDigestHttpClient {
                         if (authStatusCode >= 200 && authStatusCode < 300) {
                             return authBody;
                         } else if (authStatusCode == 403) {
-                            throw new IOException("Digest authentication failed: 403 Forbidden");
+                            throw new IOException("Digest authentication failed: 403 Forbidden. Response body: " + truncate(authBody, 500));
+                        } else if (authStatusCode == 400 || authStatusCode == 501) {
+                            // HTTP 400/501 - ожидаемые ошибки для некоторых endpoints, логируем как DEBUG
+                            log.debug("HTTP {} from Dahua API at {}: {}", authStatusCode, requestUri, truncate(authBody, 200));
+                            throw new IOException(String.format("HTTP %d: %s", authStatusCode, truncate(authBody, 200)));
                         } else {
-                            throw new IOException(
-                                    "Unexpected status code after authentication: " + authStatusCode
+                            // Неожиданные ошибки логируем как ERROR
+                            String errorDetails = String.format(
+                                    "Unexpected status code after authentication: %d. Response body: %s. URL: %s",
+                                    authStatusCode, truncate(authBody, 500), requestUri
                             );
+                            log.error("Dahua API error: {}", errorDetails);
+                            throw new IOException(errorDetails);
                         }
                     }
                 } else {

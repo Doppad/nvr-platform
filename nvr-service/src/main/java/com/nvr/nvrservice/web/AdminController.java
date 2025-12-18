@@ -162,10 +162,37 @@ public class AdminController {
         Long uid = getAdminUserId();
         attachAdminUser(uid);
         try {
+            // Запускаем синхронизацию синхронно (быстро, только структура + nvr_status)
             syncService.syncDeviceChannels(id);
-            return ResponseEntity.ok("Synchronization started");
+            
+            // Возвращаем информацию о синхронизации
+            SyncResponse response = new SyncResponse();
+            response.deviceId = id;
+            response.syncStartedAt = java.time.OffsetDateTime.now();
+            response.message = "Synchronization completed";
+            
+            return ResponseEntity.ok(response);
         } catch (Exception e) {
             return ResponseEntity.status(500).body("Sync failed: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/devices/{id}/check-rtsp")
+    public ResponseEntity<?> checkRtspHealth(@PathVariable Long id) {
+        Long uid = getAdminUserId();
+        attachAdminUser(uid);
+        try {
+            // Запускаем RTSP проверку (может занять время, но выполняется асинхронно внутри)
+            syncService.checkRtspHealthForDevice(id);
+            
+            SyncResponse response = new SyncResponse();
+            response.deviceId = id;
+            response.syncStartedAt = java.time.OffsetDateTime.now();
+            response.message = "RTSP health check started";
+            
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("RTSP check failed: " + e.getMessage());
         }
     }
 
@@ -186,5 +213,12 @@ public class AdminController {
         public String house;
         public String apartment;
         public String comment;
+    }
+
+    @Data
+    public static class SyncResponse {
+        public Long deviceId;
+        public java.time.OffsetDateTime syncStartedAt;
+        public String message;
     }
 }

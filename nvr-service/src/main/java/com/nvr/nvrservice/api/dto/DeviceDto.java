@@ -18,6 +18,7 @@ public class DeviceDto {
 
     // Камеры
     int camerasCount;
+    Integer maxChannels; // Максимальное количество каналов устройства (16/32/64)
 
     // Viewer-учётка
     String viewerLogin;

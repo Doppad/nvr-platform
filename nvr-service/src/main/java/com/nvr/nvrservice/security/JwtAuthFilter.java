@@ -31,7 +31,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                                     FilterChain chain) throws ServletException, IOException {
 
         final String authHeader = request.getHeader("Authorization");
-        System.out.println("AUTH HDR: " + authHeader);
 
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             final String jwt = authHeader.substring(7);
@@ -44,10 +43,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                         .parseClaimsJws(jwt)
                         .getBody();
 
-                System.out.println("JWT OK. sub=" + claims.getSubject()
-                        + " plan=" + claims.get("plan")
-                        + " maxCameras=" + claims.get("maxCameras")
-                        + " exp=" + claims.getExpiration());
+                log.debug("JWT OK. sub={}, plan={}, maxCameras={}, exp={}", 
+                        claims.getSubject(), claims.get("plan"), 
+                        claims.get("maxCameras"), claims.getExpiration());
 
                 // --- извлекаем userId: sub -> userId -> uid
                 Long userId = null;
@@ -81,11 +79,11 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     // Кладём наш контекст в request-атрибут (забираем его в сервисах при необходимости)
                     request.setAttribute("userContext", new UserContext(userId, role, plan, maxCameras, archiveDays));
                 } else {
-                    System.out.println("JWT parsed but userId is NULL (sub=" + claims.getSubject() + ")");
+                    log.debug("JWT parsed but userId is NULL (sub={})", claims.getSubject());
                     SecurityContextHolder.clearContext();
                 }
             } catch (Exception e) {
-                System.out.println("JWT FAILED: " + e.getClass().getSimpleName() + " - " + e.getMessage());
+                log.debug("JWT validation failed: {} - {}", e.getClass().getSimpleName(), e.getMessage());
                 SecurityContextHolder.clearContext();
             }
         }

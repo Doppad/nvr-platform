@@ -53,7 +53,7 @@ public class NvrCamera {
 
     @Column(name = "status", length = 16)
     @Builder.Default
-    private String status = "UNKNOWN";
+    private String status = "UNKNOWN"; // Legacy поле, оставлено для обратной совместимости
 
     @Column(name = "is_active")
     @Builder.Default
@@ -61,4 +61,25 @@ public class NvrCamera {
 
     @Column(name = "status_updated_at")
     private OffsetDateTime statusUpdatedAt;
+
+    // Новые поля для разделения статусов
+    // nullable = true, чтобы Hibernate не пытался создать NOT NULL колонку при синхронизации схемы
+    // NOT NULL будет установлен через миграцию после заполнения данных
+    @Column(name = "has_camera")
+    @Builder.Default
+    private Boolean hasCamera = false;
+
+    @Column(name = "nvr_status", length = 16)
+    @Builder.Default
+    private String nvrStatus = "UNKNOWN";
+
+    @Column(name = "rtsp_status", length = 16)
+    @Builder.Default
+    private String rtspStatus = "NONE";
+
+    @Column(name = "nvr_status_updated_at")
+    private OffsetDateTime nvrStatusUpdatedAt;
+
+    @Column(name = "rtsp_status_updated_at")
+    private OffsetDateTime rtspStatusUpdatedAt;
 }
