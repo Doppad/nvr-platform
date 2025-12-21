@@ -30,7 +30,8 @@ public class AuthService {
 
     @Transactional
     public String requestOtp(String emailOrPhone) {
-        // НЕ создаем пользователя при запросе OTP
+        // НЕ проверяем регистрацию при запросе OTP
+        // Проверка будет при verifyOtp - там вернется USER_NOT_REGISTERED если пользователь не зарегистрирован
         // OTP создаётся без userId, только по target (телефону)
         String code = otpService.createAndSaveOtp(null, emailOrPhone);
         System.out.println("OTP для " + emailOrPhone + ": " + code); // код на этом MVP печатается в лог (в проде полагаю надо SMS/email)
