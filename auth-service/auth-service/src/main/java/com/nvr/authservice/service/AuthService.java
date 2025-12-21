@@ -24,48 +24,56 @@ public class AuthService {
     private final JwtService jwtService;
     private final SubscriptionService subscriptionService;
     private final RefreshTokenService refreshTokenService;
+    private final PhoneValidationService phoneValidationService;
 
     @Value("${app.jwt.ttl-minutes}")
     private long accessTtlMinutes;
 
     @Transactional
     public String requestOtp(String emailOrPhone) {
+        // Валидируем номер телефона (формат, длина, только РФ)
+        phoneValidationService.validateRussianPhone(emailOrPhone);
+        String normalizedPhone = phoneValidationService.normalizePhone(emailOrPhone);
+        
         // НЕ проверяем регистрацию при запросе OTP
         // Проверка будет при verifyOtp - там вернется USER_NOT_REGISTERED если пользователь не зарегистрирован
         // OTP создаётся без userId, только по target (телефону)
-        String code = otpService.createAndSaveOtp(null, emailOrPhone);
-        System.out.println("OTP для " + emailOrPhone + ": " + code); // код на этом MVP печатается в лог (в проде полагаю надо SMS/email)
+        String code = otpService.createAndSaveOtp(null, normalizedPhone);
+        System.out.println("OTP для " + normalizedPhone + ": " + code); // код на этом MVP печатается в лог (в проде полагаю надо SMS/email)
         return "OTP sent (check server log)";
     }
 
     @Transactional
     public TokenPairResp verifyOtp(String emailOrPhone, String code, String userAgent, String ip) {
-        // 1. Проверяем OTP
-        boolean ok = otpService.verify(emailOrPhone, code);
+        // 1. Валидируем и нормализуем номер телефона
+        phoneValidationService.validateRussianPhone(emailOrPhone);
+        String normalizedPhone = phoneValidationService.normalizePhone(emailOrPhone);
+        
+        // 2. Проверяем OTP (используем нормализованный номер)
+        boolean ok = otpService.verify(normalizedPhone, code);
         if (!ok) {
             throw new InvalidOtpException("Invalid or expired OTP");
         }
 
-        // 2. Ищем пользователя по телефону
-        String phone = emailOrPhone;
-        AppUser user = userRepo.findByPhone(phone)
-                .orElseThrow(() -> new UserNotRegisteredException("User with phone " + phone + " is not registered. Please register first."));
+        // 3. Ищем пользователя по телефону (используем нормализованный номер)
+        AppUser user = userRepo.findByPhone(normalizedPhone)
+                .orElseThrow(() -> new UserNotRegisteredException("User with phone " + normalizedPhone + " is not registered. Please register first."));
 
-        // 3. Генерим access-token с реальными клеймами из подписки
+        // 4. Генерим access-token с реальными клеймами из подписки
         Map<String, Object> claims = subscriptionService.claimsForUser(user);
         String accessToken = jwtService.issueToken(user.getId(), claims);
 
-        // 4. Создаем refresh-token
+        // 5. Создаем refresh-token
         RefreshToken refresh = refreshTokenService.createToken(
                 user.getId(),
                 userAgent,
                 ip
         );
 
-        // 5. TTL access токена (в секундах)
+        // 6. TTL access токена (в секундах)
         long expiresIn = TimeUnit.MINUTES.toSeconds(accessTtlMinutes);
 
-        // 6. Возвращаем пару токенов
+        // 7. Возвращаем пару токенов
         return new TokenPairResp(accessToken, refresh.getToken(), expiresIn);
     }
 
@@ -107,7 +115,11 @@ public class AuthService {
      */
     @Transactional
     public RegisterResponse register(String phone, String firstName, String lastName, String middleName, Long addressId) {
-        Optional<AppUser> existing = userRepo.findByPhone(phone);
+        // Валидируем и нормализуем номер телефона
+        phoneValidationService.validateRussianPhone(phone);
+        String normalizedPhone = phoneValidationService.normalizePhone(phone);
+        
+        Optional<AppUser> existing = userRepo.findByPhone(normalizedPhone);
         
         AppUser user;
         if (existing.isPresent()) {
@@ -126,13 +138,13 @@ public class AuthService {
                 user = userRepo.save(user);
             } else {
                 // Пользователь уже зарегистрирован
-                throw new IllegalArgumentException("User with phone " + phone + " already exists and is registered");
+                throw new IllegalArgumentException("User with phone " + normalizedPhone + " already exists and is registered");
             }
         } else {
             // Создаем нового пользователя
             String fullName = buildFullName(firstName, lastName, middleName);
             user = AppUser.builder()
-                    .phone(phone)
+                    .phone(normalizedPhone)
                     .email(null) // email не используется
                     .fullName(fullName) // legacy поле
                     .firstName(firstName)
