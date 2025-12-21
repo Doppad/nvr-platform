@@ -2,23 +2,32 @@ package com.nvr.authservice.service;
 
 import com.nvr.authservice.domain.AppUser;
 import com.nvr.authservice.domain.PaymentAttempt;
+import com.nvr.authservice.domain.PaymentAttemptCamera;
 import com.nvr.authservice.domain.SubscriptionPlan;
 import com.nvr.authservice.domain.UserSubscription;
 import com.nvr.authservice.repo.AppUserRepository;
+import com.nvr.authservice.repo.PaymentAttemptCameraRepository;
 import com.nvr.authservice.repo.PaymentAttemptRepository;
 import com.nvr.authservice.repo.SubscriptionPlanRepository;
+import com.nvr.authservice.repo.UserSubscriptionCameraRepository;
 import com.nvr.authservice.repo.UserSubscriptionRepository;
+import com.nvr.authservice.subscription.UserSubscriptionCamera;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -27,9 +36,12 @@ public class BillingService {
 
     private final AppUserRepository userRepo;
     private final PaymentAttemptRepository paymentAttemptRepo;
+    private final PaymentAttemptCameraRepository paymentAttemptCameraRepo;
     private final TinkoffApiClient tinkoffApiClient;
     private final SubscriptionPlanRepository planRepo;
     private final UserSubscriptionRepository subscriptionRepo;
+    private final UserSubscriptionCameraRepository userSubscriptionCameraRepo;
+    private final NvrCameraValidationService cameraValidationService;
 
     @Value("${app.billing.public-base-url:https://pay.okodoma.ru}")
     private String publicBaseUrl;
@@ -59,10 +71,11 @@ public class BillingService {
      *
      * @param userId ID пользователя
      * @param planCode код плана (CAM_1 или CAM_3)
+     * @param cameraIds список ID камер для подписки (обязателен)
      * @return платёжная сессия с URL для редиректа
      */
     @Transactional
-    public BillingSession createSession(Long userId, String planCode) {
+    public BillingSession createSession(Long userId, String planCode, List<Long> cameraIds) {
         AppUser user = userRepo.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
 
@@ -81,6 +94,40 @@ public class BillingService {
         if (plan.getCurrency() == null || plan.getCurrency().isBlank()) {
             throw new IllegalStateException("Plan " + planCode + " has no currency configured");
         }
+
+        // Валидация cameraIds
+        if (cameraIds == null || cameraIds.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "cameraIds is required and cannot be empty"
+            );
+        }
+
+        // Проверка на дубликаты
+        Set<Long> uniqueIds = new HashSet<>(cameraIds);
+        if (uniqueIds.size() != cameraIds.size()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "cameraIds contains duplicates"
+            );
+        }
+
+        // Проверка количества камер в соответствии с планом
+        Integer expectedCount = plan.getCameraQuota();
+        if (expectedCount == null) {
+            throw new IllegalStateException("Plan " + planCode + " has no cameraQuota configured");
+        }
+
+        if (cameraIds.size() != expectedCount) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    String.format("Plan %s requires exactly %d camera(s), but %d provided", 
+                            planCode, expectedCount, cameraIds.size())
+            );
+        }
+
+        // Проверка принадлежности камер пользователю через nvr-service
+        cameraValidationService.validateCameraOwnership(userId, cameraIds);
 
         // Берем цену из БД - безопасно!
         Long amountMinor = plan.getPriceMinor();
@@ -102,6 +149,18 @@ public class BillingService {
                 .build();
 
         paymentAttemptRepo.save(attempt);
+
+        // Сохраняем выбранные камеры
+        for (Long cameraId : cameraIds) {
+            PaymentAttemptCamera paymentCamera = PaymentAttemptCamera.builder()
+                    .paymentAttempt(attempt)
+                    .cameraId(cameraId)
+                    .build();
+            paymentAttemptCameraRepo.save(paymentCamera);
+        }
+
+        log.info("Saved {} camera(s) for payment attempt: AttemptId={}, CameraIds={}", 
+                cameraIds.size(), attempt.getId(), cameraIds);
 
         // Создаем описание платежа
         String description = String.format("Подписка %s (%s)", plan.getTitle(), planCode);
@@ -200,8 +259,58 @@ public class BillingService {
         log.info("Subscription saved: SubscriptionId={}, UserId={}, PlanCode={}, Active={}, EndsAt={}", 
                 subscription.getId(), attempt.getUser().getId(), plan.getCode(), subscription.isActive(), subscription.getEndsAt());
 
-        log.info("Created subscription for user {}: Plan={}, PaymentId={}, SubscriptionId={}",
-                attempt.getUser().getId(), plan.getCode(), paymentId, subscription.getId());
+        // Получаем сохраненные cameraIds из PaymentAttempt
+        List<PaymentAttemptCamera> paymentCameras = paymentAttemptCameraRepo.findByPaymentAttemptId(attempt.getId());
+        List<Long> cameraIds = paymentCameras.stream()
+                .map(PaymentAttemptCamera::getCameraId)
+                .collect(Collectors.toList());
+
+        log.info("Found {} camera(s) for payment attempt: CameraIds={}", cameraIds.size(), cameraIds);
+
+        // Проверяем, что камеры не имеют других активных подписок
+        for (Long cameraId : cameraIds) {
+            // Проверяем активные подписки на эту камеру
+            List<UserSubscriptionCamera> existingCameras = userSubscriptionCameraRepo.findActiveByCameraId(cameraId, now);
+
+            if (!existingCameras.isEmpty()) {
+                String existingSubscriptionIds = existingCameras.stream()
+                        .map(usc -> usc.getUserSubscription().getId().toString())
+                        .collect(Collectors.joining(", "));
+                log.error("Camera {} already has active subscription(s): SubscriptionIds={}", cameraId, existingSubscriptionIds);
+                throw new IllegalStateException(
+                        String.format("Camera %d already has an active subscription. Subscription IDs: %s", 
+                                cameraId, existingSubscriptionIds)
+                );
+            }
+        }
+
+        // Создаем записи UserSubscriptionCamera для каждой камеры
+        int createdCount = 0;
+        for (Long cameraId : cameraIds) {
+            // Проверяем, не создана ли уже запись (защита от дублей)
+            boolean alreadyExists = userSubscriptionCameraRepo.findAll().stream()
+                    .anyMatch(usc -> usc.getUserSubscription().getId().equals(subscription.getId())
+                            && usc.getCameraId().equals(cameraId));
+
+            if (alreadyExists) {
+                log.warn("UserSubscriptionCamera already exists: SubscriptionId={}, CameraId={}", 
+                        subscription.getId(), cameraId);
+                continue;
+            }
+
+            UserSubscriptionCamera subscriptionCamera = UserSubscriptionCamera.builder()
+                    .userSubscription(subscription)
+                    .cameraId(cameraId)
+                    .build();
+
+            userSubscriptionCameraRepo.save(subscriptionCamera);
+            createdCount++;
+            log.debug("Created UserSubscriptionCamera: SubscriptionId={}, CameraId={}", 
+                    subscription.getId(), cameraId);
+        }
+
+        log.info("Created {} camera subscription(s) for user {}: Plan={}, PaymentId={}, SubscriptionId={}, CameraIds={}",
+                createdCount, attempt.getUser().getId(), plan.getCode(), paymentId, subscription.getId(), cameraIds);
     }
 
     /**

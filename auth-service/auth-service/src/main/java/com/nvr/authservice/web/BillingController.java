@@ -79,7 +79,7 @@ public class BillingController {
         }
 
         // Цена берется из БД - безопасно!
-        return billingService.createSession(userId, req.planCode);
+        return billingService.createSession(userId, req.planCode, req.cameraIds);
     }
 
     /**
@@ -134,6 +134,13 @@ public class BillingController {
          * Цена берется из БД автоматически - безопасно!
          */
         private String planCode;
+
+        /**
+         * Список ID камер для подписки.
+         * Для CAM_1 должно быть ровно 1 камера.
+         * Для CAM_3 должно быть ровно 3 камеры.
+         */
+        private java.util.List<Long> cameraIds;
     }
 
     /**

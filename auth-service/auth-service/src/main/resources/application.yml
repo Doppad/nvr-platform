@@ -34,3 +34,5 @@ app:
     password: ${APP_TINKOFF_PASSWORD:evjMB_tTiMh8rm9P}
   billing:
     public-base-url: ${APP_BILLING_PUBLIC_BASE_URL:https://pay.okodoma.ru}
+  nvr-service:
+    base-url: ${APP_NVR_SERVICE_BASE_URL:http://localhost:8082}

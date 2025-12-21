@@ -3,6 +3,8 @@ package com.nvr.authservice.subscription;
 
 import com.nvr.authservice.domain.UserSubscription;
 import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -19,6 +21,8 @@ import lombok.Setter;
 @Getter
 @Setter
 @NoArgsConstructor
+@AllArgsConstructor
+@Builder
 public class UserSubscriptionCamera {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

@@ -2,6 +2,7 @@ package com.nvr.authservice.web;
 
 import com.nvr.authservice.domain.UserSubscription;
 import com.nvr.authservice.repo.AppUserRepository;
+import com.nvr.authservice.repo.UserSubscriptionCameraRepository;
 import com.nvr.authservice.repo.UserSubscriptionRepository;
 import com.nvr.authservice.service.SubscriptionService;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +22,7 @@ public class MeController {     // Возвращает профиль теку�
     private final AppUserRepository userRepo;
     private final SubscriptionService subscriptionService;
     private final UserSubscriptionRepository userSubscriptionRepo;
+    private final UserSubscriptionCameraRepository userSubscriptionCameraRepo;
 
     @GetMapping("/auth/me")
     public ResponseEntity<?> me(Authentication auth) {
@@ -42,16 +44,26 @@ public class MeController {     // Возвращает профиль теку�
         int archiveDays = ((Number) claims.getOrDefault("archiveDays", 14)).intValue();
         
         List<SubscriptionInfo> subscriptions = activeSubscriptions.stream()
-                .map(sub -> new SubscriptionInfo(
-                        sub.getId(),
-                        sub.getPlan().getCode(),
-                        sub.getPlan().getTitle(),
-                        sub.getPlan().getArchiveDays(),
-                        sub.getPlan().getCameraQuota() != null ? sub.getPlan().getCameraQuota() : 0,
-                        sub.getStartsAt(),
-                        sub.getEndsAt(),
-                        sub.isActive()
-                ))
+                .map(sub -> {
+                    // Получаем список камер для этой подписки
+                    List<Long> cameraIds = userSubscriptionCameraRepo
+                            .findByUserSubscriptionId(sub.getId())
+                            .stream()
+                            .map(usc -> usc.getCameraId())
+                            .collect(Collectors.toList());
+                    
+                    return new SubscriptionInfo(
+                            sub.getId(),
+                            sub.getPlan().getCode(),
+                            sub.getPlan().getTitle(),
+                            sub.getPlan().getArchiveDays(),
+                            sub.getPlan().getCameraQuota() != null ? sub.getPlan().getCameraQuota() : 0,
+                            sub.getStartsAt(),
+                            sub.getEndsAt(),
+                            sub.isActive(),
+                            cameraIds
+                    );
+                })
                 .collect(Collectors.toList());
 
         // maxCameras берем из активных подписок, если есть, иначе 1
@@ -59,6 +71,9 @@ public class MeController {     // Возвращает профиль теку�
             subscriptions.stream()
                 .mapToInt(SubscriptionInfo::cameraQuota)
                 .sum();
+
+        // Получаем список ID камер с активными подписками
+        List<Long> premiumCameraIds = userSubscriptionCameraRepo.findActiveCameraIdsByUserId(userId, Instant.now());
 
         var resp = new MeResponse(
                 user.getId(),
@@ -69,7 +84,8 @@ public class MeController {     // Возвращает профиль теку�
                 user.getMiddleName(),
                 user.getAddressId(), // возвращаем сохраненный addressId
                 new Plan(planCode, archiveDays, maxCameras),
-                subscriptions
+                subscriptions,
+                premiumCameraIds
         );
         return ResponseEntity.ok(resp);
     }
@@ -84,7 +100,8 @@ public class MeController {     // Возвращает профиль теку�
             int cameraQuota,
             Instant startsAt,
             Instant endsAt,
-            boolean active
+            boolean active,
+            List<Long> cameraIds // ID камер, привязанных к этой подписке
     ) {}
     
     public record MeResponse(
@@ -96,6 +113,7 @@ public class MeController {     // Возвращает профиль теку�
             String middleName,
             Long addressId, // ID адреса, сохраненный при регистрации
             Plan plan,
-            List<SubscriptionInfo> subscriptions
+            List<SubscriptionInfo> subscriptions,
+            List<Long> premiumCameraIds // ID камер с активными подписками
     ) {}
 }
