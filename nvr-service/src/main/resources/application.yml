@@ -23,6 +23,7 @@ spring:
       hibernate.jdbc.time_zone: UTC
   flyway:
     enabled: true
+    out-of-order: true  # Разрешить применение миграций не по порядку (для V7, V8)
 
 # ключ для CryptoService
 nvr:
