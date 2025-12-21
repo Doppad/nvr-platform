@@ -21,6 +21,7 @@ class AuthServiceTest {
     private JwtService jwtService;
     private SubscriptionService subscriptionService;
     private RefreshTokenService refreshTokenService;
+    private PhoneValidationService phoneValidationService;
 
     private AuthService authService;
 
@@ -31,13 +32,15 @@ class AuthServiceTest {
         jwtService = mock(JwtService.class);
         subscriptionService = mock(SubscriptionService.class);
         refreshTokenService = mock(RefreshTokenService.class);
+        phoneValidationService = mock(PhoneValidationService.class);
 
         authService = new AuthService(
                 userRepo,
                 otpService,
                 jwtService,
                 subscriptionService,
-                refreshTokenService
+                refreshTokenService,
+                phoneValidationService
         );
 
         ReflectionTestUtils.setField(authService, "accessTtlMinutes", 60L);
@@ -50,6 +53,10 @@ class AuthServiceTest {
         String code = "123456";
         String userAgent = "JUnit";
         String ip = "127.0.0.1";
+
+        // Мокируем валидацию и нормализацию телефона
+        doNothing().when(phoneValidationService).validateRussianPhone(target);
+        when(phoneValidationService.normalizePhone(target)).thenReturn(target);
 
         when(otpService.verify(target, code)).thenReturn(true);
         AppUser user = new AppUser();
@@ -79,11 +86,13 @@ class AuthServiceTest {
         assertThat(resp.getExpiresIn()).isEqualTo(60L * 60L);
         assertThat(resp.getJwt()).isEqualTo("jwt-token-123");
 
+        verify(phoneValidationService).validateRussianPhone(target);
+        verify(phoneValidationService).normalizePhone(target);
         verify(otpService).verify(target, code);
         verify(subscriptionService).claimsForUser(user);
         verify(jwtService).issueToken(1L, claims);
         verify(refreshTokenService).createToken(1L, userAgent, ip);
-        verifyNoMoreInteractions(jwtService, subscriptionService, otpService, refreshTokenService);
+        verifyNoMoreInteractions(jwtService, subscriptionService, otpService, refreshTokenService, phoneValidationService);
         verify(userRepo, never()).save(any());
     }
 }
