@@ -11,6 +11,7 @@ import com.nvr.authservice.repo.UserSubscriptionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -367,6 +368,76 @@ public class BillingService {
             String sessionId,  // PaymentId от Тинькофф
             String redirectUrl // URL для редиректа на платёжную форму
     ) {
+    }
+
+    /**
+     * Фоновая задача для обработки PENDING платежей.
+     * Запускается каждые 5 минут и проверяет статус платежей в Тинькофф.
+     * Защита от дублей: handleSuccessfulPayment() проверяет статус PENDING перед обработкой.
+     */
+    @Scheduled(fixedDelay = 300000) // каждые 5 минут (300000 мс)
+    @Transactional
+    public void processPendingPayments() {
+        log.debug("Starting scheduled task to process pending payments");
+        
+        List<PaymentAttempt> pendingPayments = paymentAttemptRepo.findByStatus("PENDING");
+        
+        if (pendingPayments.isEmpty()) {
+            log.debug("No pending payments found");
+            return;
+        }
+        
+        log.info("Found {} pending payment(s) to process", pendingPayments.size());
+        
+        int processed = 0;
+        int failed = 0;
+        
+        for (PaymentAttempt attempt : pendingPayments) {
+            try {
+                // Проверяем, что есть providerSessionId и это не временный orderId
+                String paymentId = attempt.getProviderSessionId();
+                if (paymentId == null || paymentId.startsWith("ORDER_")) {
+                    log.debug("Skipping payment attempt {} - paymentId not yet available (providerSessionId={})", 
+                            attempt.getId(), paymentId);
+                    continue;
+                }
+                
+                log.debug("Checking payment status for PaymentAttempt {} (PaymentId={})", attempt.getId(), paymentId);
+                
+                // Проверяем статус в Тинькофф
+                TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentId);
+                log.debug("Payment status from Tinkoff: Status={}, Success={}", state.status(), state.success());
+                
+                // Если платеж успешен - обрабатываем
+                if ("CONFIRMED".equals(state.status()) || "AUTHORIZED".equals(state.status())) {
+                    log.info("Processing successful payment: PaymentAttemptId={}, PaymentId={}, OrderId={}", 
+                            attempt.getId(), paymentId, attempt.getOrderId());
+                    
+                    // handleSuccessfulPayment() защищен от дублей проверкой статуса PENDING
+                    handleSuccessfulPayment(paymentId, attempt.getOrderId());
+                    processed++;
+                } else if ("REJECTED".equals(state.status()) || "CANCELED".equals(state.status())) {
+                    // Помечаем как неуспешный
+                    log.info("Marking payment as failed: PaymentAttemptId={}, PaymentId={}, Status={}", 
+                            attempt.getId(), paymentId, state.status());
+                    handleFailedPayment(paymentId, attempt.getOrderId());
+                    failed++;
+                } else {
+                    // NEW, AUTHORIZING и т.д. - еще обрабатывается, оставляем PENDING
+                    log.debug("Payment still in progress: PaymentAttemptId={}, PaymentId={}, Status={}", 
+                            attempt.getId(), paymentId, state.status());
+                }
+                
+            } catch (Exception e) {
+                log.error("Error processing pending payment {} (PaymentId={}, OrderId={}): {}", 
+                        attempt.getId(), attempt.getProviderSessionId(), attempt.getOrderId(), 
+                        e.getMessage(), e);
+                // Продолжаем обработку следующих платежей
+            }
+        }
+        
+        log.info("Scheduled task completed: processed={}, failed={}, total={}", 
+                processed, failed, pendingPayments.size());
     }
 
     /**
