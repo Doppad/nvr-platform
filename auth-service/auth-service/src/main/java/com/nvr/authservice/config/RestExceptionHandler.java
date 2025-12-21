@@ -1,5 +1,7 @@
 package com.nvr.authservice.config;
 
+import com.nvr.authservice.exception.InvalidOtpException;
+import com.nvr.authservice.exception.UserNotRegisteredException;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 
@@ -22,6 +24,24 @@ public class RestExceptionHandler {
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of(
                 "timestamp", Instant.now().toString(),
                 "code", "TOO_MANY_REQUESTS",
+                "message", ex.getMessage()
+        ));
+    }
+
+    @ExceptionHandler(InvalidOtpException.class)
+    public ResponseEntity<?> invalidOtp(InvalidOtpException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
+                "timestamp", Instant.now().toString(),
+                "code", "INVALID_OTP",
+                "message", ex.getMessage()
+        ));
+    }
+
+    @ExceptionHandler(UserNotRegisteredException.class)
+    public ResponseEntity<?> userNotRegistered(UserNotRegisteredException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                "timestamp", Instant.now().toString(),
+                "code", "USER_NOT_REGISTERED",
                 "message", ex.getMessage()
         ));
     }

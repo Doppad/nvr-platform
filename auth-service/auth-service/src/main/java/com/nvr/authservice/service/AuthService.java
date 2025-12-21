@@ -1,6 +1,8 @@
 package com.nvr.authservice.service;
 
 import com.nvr.authservice.domain.RefreshToken;
+import com.nvr.authservice.exception.InvalidOtpException;
+import com.nvr.authservice.exception.UserNotRegisteredException;
 import com.nvr.authservice.repo.AppUserRepository;
 import com.nvr.authservice.domain.AppUser;
 import com.nvr.authservice.web.AuthController;
@@ -11,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.nvr.authservice.web.AuthController.TokenPairResp;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -27,21 +30,25 @@ public class AuthService {
 
     @Transactional
     public String requestOtp(String emailOrPhone) {
-        AppUser user = findOrCreate(emailOrPhone); // проверяет, есть ли такой пользователь в таблице app_user, если нет - создает нового
-        String code = otpService.createAndSaveOtp(user, emailOrPhone); // OtpService сгенерирует 6-значный код, чтобы захэшировать и сохранить в таблицу otp_attempt с дедлайном
+        // НЕ создаем пользователя при запросе OTP
+        // OTP создаётся без userId, только по target (телефону)
+        String code = otpService.createAndSaveOtp(null, emailOrPhone);
         System.out.println("OTP для " + emailOrPhone + ": " + code); // код на этом MVP печатается в лог (в проде полагаю надо SMS/email)
         return "OTP sent (check server log)";
     }
 
     @Transactional
     public TokenPairResp verifyOtp(String emailOrPhone, String code, String userAgent, String ip) {
-
         // 1. Проверяем OTP
         boolean ok = otpService.verify(emailOrPhone, code);
-        if (!ok) throw new IllegalArgumentException("Invalid or expired OTP");
+        if (!ok) {
+            throw new InvalidOtpException("Invalid or expired OTP");
+        }
 
-        // 2. Находим или создаём пользователя
-        AppUser user = findOrCreate(emailOrPhone);
+        // 2. Ищем пользователя по телефону
+        String phone = emailOrPhone;
+        AppUser user = userRepo.findByPhone(phone)
+                .orElseThrow(() -> new UserNotRegisteredException("User with phone " + phone + " is not registered. Please register first."));
 
         // 3. Генерим access-token с реальными клеймами из подписки
         Map<String, Object> claims = subscriptionService.claimsForUser(user);
@@ -99,26 +106,41 @@ public class AuthService {
      */
     @Transactional
     public RegisterResponse register(String phone, String firstName, String lastName, String middleName, Long addressId) {
-        // Проверяем, не существует ли уже пользователь с таким телефоном
-        if (userRepo.findByPhone(phone).isPresent()) {
-            throw new IllegalArgumentException("User with phone " + phone + " already exists");
+        Optional<AppUser> existing = userRepo.findByPhone(phone);
+        
+        AppUser user;
+        if (existing.isPresent()) {
+            user = existing.get();
+            // Если пользователь существует, но не зарегистрирован (firstName/lastName == null)
+            if (user.getFirstName() == null && user.getLastName() == null) {
+                // Обновляем данные пользователя
+                String fullName = buildFullName(firstName, lastName, middleName);
+                user.setFullName(fullName);
+                user.setFirstName(firstName);
+                user.setLastName(lastName);
+                user.setMiddleName(middleName);
+                if (addressId != null) {
+                    user.setAddressId(addressId);
+                }
+                user = userRepo.save(user);
+            } else {
+                // Пользователь уже зарегистрирован
+                throw new IllegalArgumentException("User with phone " + phone + " already exists and is registered");
+            }
+        } else {
+            // Создаем нового пользователя
+            String fullName = buildFullName(firstName, lastName, middleName);
+            user = AppUser.builder()
+                    .phone(phone)
+                    .email(null) // email не используется
+                    .fullName(fullName) // legacy поле
+                    .firstName(firstName)
+                    .lastName(lastName)
+                    .middleName(middleName)
+                    .addressId(addressId) // сохраняем addressId при регистрации
+                    .build();
+            user = userRepo.save(user);
         }
-
-        // Формируем fullName из частей (для совместимости)
-        String fullName = buildFullName(firstName, lastName, middleName);
-
-        // Создаем пользователя с сохранением всех полей
-        AppUser user = AppUser.builder()
-                .phone(phone)
-                .email(null) // email не используется
-                .fullName(fullName) // legacy поле
-                .firstName(firstName)
-                .lastName(lastName)
-                .middleName(middleName)
-                .addressId(addressId) // сохраняем addressId при регистрации
-                .build();
-
-        user = userRepo.save(user);
 
         return new RegisterResponse(
                 user.getId(),
@@ -151,6 +173,11 @@ public class AuthService {
         return sb.length() > 0 ? sb.toString() : null;
     }
 
+    /**
+     * @deprecated Больше не используется для логина. Оставлен только для внутренних целей, если понадобится.
+     * Для логина используйте явную проверку существования пользователя.
+     */
+    @Deprecated
     private AppUser findOrCreate(String emailOrPhone) {
         // Поддержка только телефона (email убран)
         // Если передан email - все равно считаем это телефоном
