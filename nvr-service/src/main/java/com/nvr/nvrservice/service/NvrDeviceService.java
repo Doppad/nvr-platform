@@ -373,6 +373,57 @@ public class NvrDeviceService {
         }
 
         List<NvrCamera> cameras = cameraRepo.findByDeviceId(deviceId);
+        return camerasToDto(cameras);
+    }
+
+    /**
+     * Получает все камеры текущего пользователя.
+     *
+     * @return список всех камер пользователя
+     */
+    @Transactional(readOnly = true)
+    public List<ChannelDto> getAllCameras() {
+        var ctx = userCtxOrThrow();
+        List<NvrCamera> cameras;
+        
+        if (isSuperAdmin(ctx)) {
+            cameras = cameraRepo.findAll();
+        } else {
+            cameras = cameraRepo.findByDeviceOwnerId(ctx.userId());
+        }
+        
+        return camerasToDto(cameras);
+    }
+
+    /**
+     * Получает все камеры устройств, привязанных к указанному адресу.
+     *
+     * @param addressId ID адреса
+     * @return список камер по адресу
+     */
+    @Transactional(readOnly = true)
+    public List<ChannelDto> getCamerasByAddress(Long addressId) {
+        var ctx = userCtxOrThrow();
+        List<NvrCamera> cameras;
+        
+        if (isSuperAdmin(ctx)) {
+            cameras = cameraRepo.findByDeviceAddressId(addressId);
+        } else {
+            // Проверяем, что адрес принадлежит пользователю
+            addressRepo.findById(addressId)
+                    .filter(a -> a.getOwnerId().equals(ctx.userId()))
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Address not found"));
+            
+            cameras = cameraRepo.findByDeviceOwnerIdAndAddressId(ctx.userId(), addressId);
+        }
+        
+        return camerasToDto(cameras);
+    }
+
+    /**
+     * Преобразует список камер в список ChannelDto.
+     */
+    private List<ChannelDto> camerasToDto(List<NvrCamera> cameras) {
         return cameras.stream()
                 .sorted((a, b) -> Integer.compare(a.getChannelNo(), b.getChannelNo()))
                 .map(camera -> {

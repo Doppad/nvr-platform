@@ -28,4 +28,22 @@ public interface NvrCameraRepo extends JpaRepository<NvrCamera, Long> {
     @Query("select count(c) > 0 from NvrCamera c where c.device.id = :deviceId " +
            "and c.hasCamera = true and c.nvrStatus = 'UNKNOWN'")
     boolean existsByDeviceIdAndHasCameraTrueAndNvrStatusUNKNOWN(@Param("deviceId") Long deviceId);
+    
+    /**
+     * Находит все камеры пользователя (по ownerId устройства).
+     */
+    @Query("select c from NvrCamera c where c.device.ownerId = :ownerId")
+    List<NvrCamera> findByDeviceOwnerId(@Param("ownerId") Long ownerId);
+    
+    /**
+     * Находит все камеры устройств, привязанных к указанному адресу.
+     */
+    @Query("select c from NvrCamera c where c.device.addressEntity.id = :addressId")
+    List<NvrCamera> findByDeviceAddressId(@Param("addressId") Long addressId);
+    
+    /**
+     * Находит все камеры пользователя, привязанные к указанному адресу.
+     */
+    @Query("select c from NvrCamera c where c.device.ownerId = :ownerId and c.device.addressEntity.id = :addressId")
+    List<NvrCamera> findByDeviceOwnerIdAndAddressId(@Param("ownerId") Long ownerId, @Param("addressId") Long addressId);
 }

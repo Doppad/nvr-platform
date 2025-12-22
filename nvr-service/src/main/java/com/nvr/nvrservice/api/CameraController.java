@@ -1,6 +1,8 @@
 package com.nvr.nvrservice.api;
 
+import com.nvr.nvrservice.api.dto.ChannelDto;
 import com.nvr.nvrservice.repo.NvrCameraRepo;
+import com.nvr.nvrservice.service.NvrDeviceService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +26,7 @@ import java.util.stream.Collectors;
 public class CameraController {
 
     private final NvrCameraRepo cameraRepo;
+    private final NvrDeviceService deviceService;
 
     /**
      * Проверяет принадлежность камер пользователю.
@@ -78,6 +81,29 @@ public class CameraController {
         log.debug("Camera ownership validation successful: UserId={}, CameraIds={}", 
                 request.userId, request.cameraIds);
         return ResponseEntity.ok(new ValidateOwnershipResponse(true, List.of()));
+    }
+
+    /**
+     * Получает все камеры текущего пользователя.
+     *
+     * @return список всех камер пользователя
+     */
+    @GetMapping
+    public ResponseEntity<List<ChannelDto>> getAllCameras() {
+        List<ChannelDto> cameras = deviceService.getAllCameras();
+        return ResponseEntity.ok(cameras);
+    }
+
+    /**
+     * Получает все камеры устройств, привязанных к указанному адресу.
+     *
+     * @param addressId ID адреса
+     * @return список камер по адресу
+     */
+    @GetMapping("/by-address/{addressId}")
+    public ResponseEntity<List<ChannelDto>> getCamerasByAddress(@PathVariable Long addressId) {
+        List<ChannelDto> cameras = deviceService.getCamerasByAddress(addressId);
+        return ResponseEntity.ok(cameras);
     }
 
     @Data
