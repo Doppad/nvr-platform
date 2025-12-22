@@ -21,9 +21,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
+import java.time.Instant;
 
 /**
  * Сервис для синхронизации каналов с NVR устройствами.
@@ -40,8 +43,11 @@ public class NvrSyncService {
     private final CryptoService cryptoService;
     private final RtspHealthChecker rtspHealthChecker;
     
-    // Thread pool для асинхронных RTSP проверок
+    // Thread pool для асинхронных RTSP проверок каналов
     private final ExecutorService rtspCheckExecutor = Executors.newFixedThreadPool(16);
+    
+    // In-memory lock для защиты от параллельных запусков checkRtspHealthForDevice для одного deviceId
+    private final ConcurrentHashMap.KeySetView<Long, Boolean> rtspCheckInProgress = ConcurrentHashMap.newKeySet();
 
     /**
      * Синхронизирует каналы для всех устройств Dahua.
@@ -76,7 +82,7 @@ public class NvrSyncService {
      * Обновляет только rtsp_status (не трогает структуру и nvr_status).
      * Можно отключить, если RTSP проверка выполняется только вручную.
      */
-    @Scheduled(fixedRate = 600000, initialDelay = 600000) // 10 минут, старт через 10 минут после запуска
+    @Scheduled(fixedRate = 600000) // 10 минут, старт сразу после готовности Spring контекста
     public void checkRtspHealthForAllDevices() {
         log.info("Starting RTSP health check for all Dahua devices");
 
@@ -201,9 +207,6 @@ public class NvrSyncService {
                 
                 log.info("Sync completed for device {}: {} channels ({} online, {} offline, {} hidden)", 
                         device.getId(), actualChannelsCount, onlineCount, offlineCount, hiddenCount);
-                
-                // RTSP проверка выполняется отдельно по расписанию или через отдельный endpoint
-                // Не блокируем синхронизацию структуры RTSP проверками
             } else {
                 // ChannelTitle не вернул данные или вернул мало каналов - используем старый метод
                 log.debug("ChannelTitle returned {} channels, trying getChannels API for device {}", 
@@ -247,6 +250,31 @@ public class NvrSyncService {
                 
                 log.info("Sync completed for device {}: {} channels ({} online, {} offline, {} hidden)", 
                         device.getId(), channels.size(), onlineCount, offlineCount, hiddenCount);
+            }
+            
+            // Проверяем, нужно ли запускать RTSP проверку после синхронизации
+            // Запускаем только если есть камеры, которые нужно проверить:
+            // - rtspStatus is null/NONE (еще не проверяли)
+            // - nvrStatus == UNKNOWN (статус неизвестен)
+            // Используем оптимизированные existsBy методы вместо findByDeviceId
+            boolean needsRtspCheck = cameraRepo.existsByDeviceIdAndHasCameraTrueAndRtspStatusNullOrNONE(device.getId()) ||
+                                     cameraRepo.existsByDeviceIdAndHasCameraTrueAndNvrStatusUNKNOWN(device.getId());
+            
+            if (needsRtspCheck) {
+                // Запускаем RTSP проверку сразу после синхронизации для быстрого обновления статусов
+                // Запускаем асинхронно, чтобы не блокировать транзакцию синхронизации
+                // Используем ForkJoinPool.commonPool() вместо rtspCheckExecutor, чтобы не забивать пул для проверки каналов
+                final Long deviceIdForRtspCheck = device.getId();
+                CompletableFuture.runAsync(() -> {
+                    try {
+                        checkRtspHealthForDevice(deviceIdForRtspCheck);
+                    } catch (Exception e) {
+                        log.error("Failed to check RTSP health for device {} after sync: {}", 
+                                deviceIdForRtspCheck, e.getMessage(), e);
+                    }
+                });
+            } else {
+                log.debug("Skipping RTSP check for device {} after sync: all cameras already have RTSP status", device.getId());
             }
         } else {
             // Для не-Dahua устройств используем старую логику
@@ -436,13 +464,25 @@ public class NvrSyncService {
         String baseUrl = String.format("http://%s:%d", device.getIp(), httpPort);
         Map<Integer, String> cameraStates = dahuaApiClient.getCameraStates(baseUrl, username, password);
         boolean hasCameraStates = cameraStates != null && !cameraStates.isEmpty();
-        log.debug("Fetched {} camera states for ChannelTitle sync (hasCameraStates={})", 
-                cameraStates.size(), hasCameraStates);
+        
+        log.info("Fetched {} camera states for device {} (id={}, ownerId={}, totalChannels={}, username='{}')", 
+                cameraStates != null ? cameraStates.size() : 0, 
+                device.getName(), device.getId(), device.getOwnerId(), 
+                channelTitles.size(), username);
         
         if (!hasCameraStates) {
-            log.debug("No camera states received from Dahua API for device {} ({}). " +
-                    "Preserving existing nvr_status values.", 
-                    device.getId(), device.getName());
+            log.warn("No camera states received from Dahua API for device {} (id={}, ownerId={}). " +
+                    "All channels will be marked as UNKNOWN. " +
+                    "Possible causes: user '{}' doesn't have permissions to access getCameraStates API. " +
+                    "Consider using user_admin role for full access.",
+                    device.getName(), device.getId(), device.getOwnerId(), username);
+        } else if (cameraStates.size() < channelTitles.size()) {
+            log.warn("Partial camera states received for device {} (id={}, ownerId={}): got {} states for {} channels. " +
+                    "Missing states will be marked as UNKNOWN. " +
+                    "Possible causes: user '{}' has limited permissions or API returned partial data. " +
+                    "Consider using user_admin role for full access.",
+                    device.getName(), device.getId(), device.getOwnerId(), 
+                    cameraStates.size(), channelTitles.size(), username);
         }
 
         // Создаём/обновляем все каналы из channelTitles (может быть любое количество)
@@ -538,119 +578,147 @@ public class NvrSyncService {
      * @param deviceId ID устройства
      */
     public void checkRtspHealthForDevice(Long deviceId) {
-        NvrDevice device = deviceRepo.findById(deviceId)
-                .orElse(null);
-        
-        if (device == null) {
-            log.warn("Device {} not found for RTSP health check", deviceId);
+        // Защита от параллельных запусков для одного deviceId
+        if (!rtspCheckInProgress.add(deviceId)) {
+            log.debug("RTSP health check for device {} already in progress, skipping duplicate request", deviceId);
             return;
         }
         
-        // Проверяем только для устройств Dahua
-        if (!"Dahua".equalsIgnoreCase(device.getVendor())) {
-            log.debug("Skipping RTSP health check for non-Dahua device {}", deviceId);
-            return;
-        }
+        // Измеряем время работы метода с момента получения lock (до всех return внутри try)
+        Instant startTime = Instant.now();
+        // Переменные для измерения duration (нужны в finally)
+        final long[] durationTotalTimeoutSeconds = {90}; // Значение по умолчанию
+        final AtomicInteger durationTimeouts = new AtomicInteger(0); // Единый счётчик таймаутов для использования в finally
         
-        // Проверяем только каналы с has_camera=true и непустым rtsp_url (реальные камеры)
-        List<NvrCamera> channels = cameraRepo.findByDeviceId(deviceId).stream()
-                .filter(c -> Boolean.TRUE.equals(c.getHasCamera()))
-                .filter(c -> c.getRtspUrl() != null && !c.getRtspUrl().trim().isEmpty())
-                .collect(Collectors.toList());
-        
-        if (channels.isEmpty()) {
-            log.debug("No cameras (has_camera=true with RTSP URL) found for device {} to check RTSP", deviceId);
-            return;
-        }
-        
-        log.info("Starting RTSP health check for device {} ({} cameras)", deviceId, channels.size());
-        
-        OffsetDateTime now = OffsetDateTime.now();
-        
-        // Таймауты: 5 секунд на канал, 60 секунд общий таймаут на устройство
-        final long PER_CHANNEL_TIMEOUT_SECONDS = 5;
-        final long TOTAL_TIMEOUT_SECONDS = 60;
-        
-        // Счётчики для агрегации ошибок
-        final int[] failedCount = {0};
-        final int[] timeoutCount = {0};
-        
-        // Создаём асинхронные задачи для проверки каждого канала с таймаутом
-        List<CompletableFuture<Void>> futures = channels.stream()
-                .map(channel -> {
-                    final NvrCamera channelFinal = channel; // final для использования в лямбде
-                    return CompletableFuture.runAsync(() -> {
-                        String rtspUrl = channelFinal.getRtspUrl();
-                        try {
-                            boolean isOnline = rtspHealthChecker.isOnline(rtspUrl);
-                            // Обновляем только rtsp_status (не трогаем nvr_status)
-                            channelFinal.setRtspStatus(isOnline ? "OK" : "FAIL");
-                            channelFinal.setRtspStatusUpdatedAt(now);
-                            // Legacy поля для обратной совместимости
-                            channelFinal.setIsActive(isOnline);
-                            channelFinal.setStatus(isOnline ? "ONLINE" : "OFFLINE");
-                            channelFinal.setStatusUpdatedAt(now);
-                            if (!isOnline) {
+        try {
+            NvrDevice device = deviceRepo.findById(deviceId)
+                    .orElse(null);
+            
+            if (device == null) {
+                log.warn("Device {} not found for RTSP health check", deviceId);
+                return;
+            }
+            
+            // Проверяем только для устройств Dahua
+            if (!"Dahua".equalsIgnoreCase(device.getVendor())) {
+                log.debug("Skipping RTSP health check for non-Dahua device {}", deviceId);
+                return;
+            }
+            
+            // Проверяем только каналы с has_camera=true и непустым rtsp_url (реальные камеры)
+            List<NvrCamera> channels = cameraRepo.findByDeviceId(deviceId).stream()
+                    .filter(c -> Boolean.TRUE.equals(c.getHasCamera()))
+                    .filter(c -> c.getRtspUrl() != null && !c.getRtspUrl().trim().isEmpty())
+                    .collect(Collectors.toList());
+            
+            if (channels.isEmpty()) {
+                log.debug("No cameras (has_camera=true with RTSP URL) found for device {} to check RTSP", deviceId);
+                return;
+            }
+            
+            log.info("Starting RTSP health check for device {} ({} cameras)", deviceId, channels.size());
+            
+            OffsetDateTime now = OffsetDateTime.now();
+            
+            // Таймауты: 5 секунд на канал, 90 секунд общий таймаут на устройство
+            // Увеличено для устройств с большим количеством камер (16 потоков × 5 сек = 80 сек максимум)
+            final long PER_CHANNEL_TIMEOUT_SECONDS = 5;
+            final long TOTAL_TIMEOUT_SECONDS = 90;
+            durationTotalTimeoutSeconds[0] = TOTAL_TIMEOUT_SECONDS; // Для finally
+            
+            // Счётчики для агрегации ошибок
+            final int[] failedCount = {0};
+            
+            // Создаём асинхронные задачи для проверки каждого канала с таймаутом
+            List<CompletableFuture<Void>> futures = channels.stream()
+                    .map(channel -> {
+                        final NvrCamera channelFinal = channel; // final для использования в лямбде
+                        return CompletableFuture.runAsync(() -> {
+                            String rtspUrl = channelFinal.getRtspUrl();
+                            try {
+                                boolean isOnline = rtspHealthChecker.isOnline(rtspUrl);
+                                // Обновляем только rtsp_status (не трогаем nvr_status)
+                                channelFinal.setRtspStatus(isOnline ? "OK" : "FAIL");
+                                channelFinal.setRtspStatusUpdatedAt(now);
+                                // Legacy поля для обратной совместимости
+                                channelFinal.setIsActive(isOnline);
+                                channelFinal.setStatus(isOnline ? "ONLINE" : "OFFLINE");
+                                channelFinal.setStatusUpdatedAt(now);
+                                if (!isOnline) {
+                                    synchronized (failedCount) {
+                                        failedCount[0]++;
+                                    }
+                                }
+                            } catch (Exception e) {
+                                log.debug("RTSP check failed for channel {} (device {}): {}", 
+                                        channelFinal.getChannelNo(), deviceId, e.getMessage());
                                 synchronized (failedCount) {
                                     failedCount[0]++;
                                 }
+                                channelFinal.setRtspStatus("FAIL");
+                                channelFinal.setRtspStatusUpdatedAt(now);
+                                channelFinal.setIsActive(false);
+                                channelFinal.setStatus("OFFLINE");
+                                channelFinal.setStatusUpdatedAt(now);
                             }
-                        } catch (Exception e) {
-                            log.debug("RTSP check failed for channel {} (device {}): {}", 
-                                    channelFinal.getChannelNo(), deviceId, e.getMessage());
+                        }, rtspCheckExecutor)
+                        .orTimeout(PER_CHANNEL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+                        .exceptionally(ex -> {
+                            if (ex instanceof java.util.concurrent.TimeoutException) {
+                                log.debug("RTSP check timeout for channel {} (device {})", 
+                                        channelFinal.getChannelNo(), deviceId);
+                                durationTimeouts.incrementAndGet(); // Атомарный инкремент
+                            }
                             synchronized (failedCount) {
                                 failedCount[0]++;
                             }
-                            channelFinal.setRtspStatus("FAIL");
-                            channelFinal.setRtspStatusUpdatedAt(now);
-                            channelFinal.setIsActive(false);
-                            channelFinal.setStatus("OFFLINE");
-                            channelFinal.setStatusUpdatedAt(now);
-                        }
-                    }, rtspCheckExecutor)
-                    .orTimeout(PER_CHANNEL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-                    .exceptionally(ex -> {
-                        if (ex instanceof java.util.concurrent.TimeoutException) {
-                            log.debug("RTSP check timeout for channel {} (device {})", 
-                                    channelFinal.getChannelNo(), deviceId);
-                            synchronized (timeoutCount) {
-                                timeoutCount[0]++;
-                            }
-                        }
-                        synchronized (failedCount) {
-                            failedCount[0]++;
-                        }
-                        return null;
-                    });
-                })
-                .collect(Collectors.toList());
-        
-        // Ждём завершения всех проверок с общим таймаутом
-        try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                    .get(TOTAL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
-        } catch (java.util.concurrent.TimeoutException e) {
-            log.warn("RTSP health check timeout for device {} after {} seconds ({} channels checked)", 
-                    deviceId, TOTAL_TIMEOUT_SECONDS, channels.size());
-        } catch (Exception e) {
-            log.error("RTSP health check error for device {}: {}", deviceId, e.getMessage(), e);
+                            return null;
+                        });
+                    })
+                    .collect(Collectors.toList());
+            
+            // Ждём завершения всех проверок с общим таймаутом
+            try {
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                        .get(TOTAL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (java.util.concurrent.TimeoutException e) {
+                log.warn("RTSP health check timeout for device {} after {} seconds ({} channels checked)", 
+                        deviceId, TOTAL_TIMEOUT_SECONDS, channels.size());
+            } catch (Exception e) {
+                log.error("RTSP health check error for device {}: {}", deviceId, e.getMessage(), e);
+            }
+            
+            // Сохраняем обновлённые каналы
+            cameraRepo.saveAll(channels);
+            
+            // Подсчитываем статусы RTSP
+            long rtspOk = channels.stream().filter(c -> "OK".equals(c.getRtspStatus())).count();
+            long rtspFail = channels.stream().filter(c -> "FAIL".equals(c.getRtspStatus())).count();
+            long rtspNone = channels.stream().filter(c -> "NONE".equals(c.getRtspStatus()) || c.getRtspStatus() == null).count();
+            
+            log.info("RTSP health check completed for device {} ({} cameras): OK={}, FAIL={}, NONE={}, timeouts={}", 
+                    deviceId, channels.size(), rtspOk, rtspFail, rtspNone, durationTimeouts.get());
+            
+            if (failedCount[0] > 0 || durationTimeouts.get() > 0) {
+                log.warn("RTSP health check for device {}: {} failed (including {} timeouts) out of {} total", 
+                        deviceId, failedCount[0], durationTimeouts.get(), channels.size());
+            }
+            
+            if (durationTimeouts.get() > 0) {
+                log.warn("RTSP health check for device {}: {} channels did not complete within {} seconds total timeout", 
+                        deviceId, durationTimeouts.get(), TOTAL_TIMEOUT_SECONDS);
+            }
+        } finally {
+            // Сначала освобождаем lock (как можно раньше)
+            rtspCheckInProgress.remove(deviceId);
+            
+            // Затем измеряем duration работы метода (в finally, чтобы сработало даже при exceptions/early-return)
+            long durationSeconds = java.time.Duration.between(startTime, Instant.now()).getSeconds();
+            if (durationSeconds > durationTotalTimeoutSeconds[0] || durationTimeouts.get() > 0) {
+                log.warn("RTSP health check for device {} took {} seconds (timeout={}s, timeouts={})", 
+                        deviceId, durationSeconds, durationTotalTimeoutSeconds[0], durationTimeouts.get());
+            }
         }
-        
-        // Сохраняем обновлённые каналы
-        cameraRepo.saveAll(channels);
-        
-        long onlineCount = channels.stream()
-                .filter(c -> "OK".equals(c.getRtspStatus()))
-                .count();
-        
-        // Агрегированное логирование ошибок
-        if (failedCount[0] > 0 || timeoutCount[0] > 0) {
-            log.warn("RTSP health check for device {}: {} online / {} total, {} failed, {} timeouts", 
-                    deviceId, onlineCount, channels.size(), failedCount[0], timeoutCount[0]);
-        }
-        
-        log.info("RTSP health check completed for device {}: {} online / {} total",
-                deviceId, onlineCount, channels.size());
     }
 
     /**

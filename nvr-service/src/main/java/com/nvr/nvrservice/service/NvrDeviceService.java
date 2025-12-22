@@ -44,10 +44,11 @@ public class NvrDeviceService {
 
     private DeviceDto toDto(NvrDevice dev) {
 
-        // Достаём viewer
+        // Достаём viewer: сначала пытаемся найти user_default, если нет - используем user_admin
         NvrDeviceUser viewer = deviceUsers.findByDeviceIdAndRole(dev.getId(), "user_default")
+                .or(() -> deviceUsers.findByDeviceIdAndRole(dev.getId(), "user_admin"))
                 .orElseThrow(() -> new IllegalStateException(
-                        "Viewer user (role=user_default) not configured for device " + dev.getId()
+                        "Viewer user (role=user_default or user_admin) not configured for device " + dev.getId()
                 ));
 
         String decryptedPass = crypto.decrypt(viewer.getPasswordEnc());
@@ -299,6 +300,59 @@ public class NvrDeviceService {
     }
 
     /**
+     * Заменяет user_default на user_admin для указанного устройства.
+     * Сохраняет username и password, меняет только role.
+     * 
+     * @param deviceId ID устройства
+     * @return true если замена выполнена успешно, false если user_default не найден
+     */
+    @Transactional
+    public boolean replaceUserDefaultWithAdmin(Long deviceId) {
+        // Находим user_default
+        var userDefault = deviceUsers.findByDeviceIdAndRole(deviceId, "user_default");
+        
+        if (userDefault.isEmpty()) {
+            log.warn("No user_default found for device {}", deviceId);
+            return false;
+        }
+        
+        var user = userDefault.get();
+        log.info("Found user_default for device {}: username={}", deviceId, user.getUsername());
+        
+        // Проверяем, не существует ли уже user_admin
+        var existingAdmin = deviceUsers.findByDeviceIdAndRole(deviceId, "user_admin");
+        if (existingAdmin.isPresent()) {
+            log.warn("user_admin already exists for device {}, deleting user_default only", deviceId);
+            deviceUsers.delete(user);
+            return true;
+        }
+        
+        // Сохраняем данные
+        String username = user.getUsername();
+        String passwordEnc = user.getPasswordEnc();
+        var createdAt = user.getCreatedAt();
+        var device = user.getDevice();
+        
+        // Удаляем user_default
+        deviceUsers.delete(user);
+        log.debug("Deleted user_default for device {}", deviceId);
+        
+        // Создаём user_admin с теми же данными
+        var adminUser = NvrDeviceUser.builder()
+                .device(device)
+                .role("user_admin")
+                .username(username)
+                .passwordEnc(passwordEnc)
+                .createdAt(createdAt)
+                .build();
+        
+        deviceUsers.save(adminUser);
+        log.info("Created user_admin for device {}: username={}", deviceId, username);
+        
+        return true;
+    }
+
+    /**
      * Получает список каналов для устройства.
      *
      * @param ownerIdIgnored игнорируется (используется из контекста)
@@ -347,7 +401,8 @@ public class NvrDeviceService {
                     dto.setVisible(hasCamera);
                     
                     // Legacy поля для обратной совместимости
-                    boolean isActive = "ONLINE".equals(uiStatus);
+                    // Если статус UNKNOWN, но has_camera=true, не считаем как ошибку (RTSP проверка еще не выполнена)
+                    boolean isActive = "ONLINE".equals(uiStatus) || ("UNKNOWN".equals(uiStatus) && hasCamera);
                     dto.setActive(isActive);
                     dto.setIsActive(isActive);
                     dto.setStatus(camera.getStatus()); // legacy поле
