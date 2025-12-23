@@ -729,12 +729,18 @@
             }]
             : [];
 
+        // Проверяем, что addressId указан
+        if (!form.addressId.value) {
+            alert('Пожалуйста, выберите адрес');
+            return;
+        }
+
         const payload = {
             name: form.name.value,
             ip: normalizeIp(form.ip.value) || '127.0.0.1',
             port: Number(form.port.value),
             vendor: form.vendor.value || 'Dahua',
-            addressId: form.addressId.value ? Number(form.addressId.value) : null,
+            addressId: Number(form.addressId.value),
             timezone: form.timezone.value || null,
             camerasCount: form.camerasCount.value ? Number(form.camerasCount.value) : null,
             users: viewerUsers

@@ -14,13 +14,19 @@ import java.time.OffsetDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
+@ToString(exclude = {"addressEntity"}) // Исключаем addressEntity чтобы избежать рекурсии
 public class NvrDevice {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @EqualsAndHashCode.Include
     private Long id;
 
-    @Column(nullable = false)
+    // DEPRECATED: Используется только для обратной совместимости и миграции
+    // В новой модели устройства привязываются к Address через addressEntity
+    @Column(nullable = true)
+    @Deprecated
     private Long ownerId;
 
     @Column(nullable = false)
@@ -48,9 +54,10 @@ public class NvrDevice {
     @Builder.Default
     private String timezone = "UTC";
 
-    // НОВОЕ: ссылка на Address через address_id
-    @ManyToOne
-    @JoinColumn(name = "address_id")
+    // ОБЯЗАТЕЛЬНОЕ: ссылка на Address через address_id
+    // NVR привязывается к Address, а не к пользователю напрямую
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "address_id", nullable = false)
     private Address addressEntity;
 
     @Column(name = "cameras_count", nullable = false)

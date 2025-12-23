@@ -17,8 +17,8 @@ public class Address {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    // Владелец адреса = userId из JWT
-    @Column(name = "owner_id", nullable = false)
+    // Владелец адреса = userId из JWT (метаданные, nullable)
+    @Column(name = "owner_id", nullable = true)
     private Long ownerId;
 
     // чтобы фронт мог показывать “Офис / Дом / Склады” без сборки строки из улица/дом.

@@ -44,11 +44,10 @@ public class NvrDeviceService {
 
     private DeviceDto toDto(NvrDevice dev) {
 
-        // Достаём viewer: сначала пытаемся найти user_default, если нет - используем user_admin
+        // Достаём viewer
         NvrDeviceUser viewer = deviceUsers.findByDeviceIdAndRole(dev.getId(), "user_default")
-                .or(() -> deviceUsers.findByDeviceIdAndRole(dev.getId(), "user_admin"))
                 .orElseThrow(() -> new IllegalStateException(
-                        "Viewer user (role=user_default or user_admin) not configured for device " + dev.getId()
+                        "Viewer user (role=user_default) not configured for device " + dev.getId()
                 ));
 
         String decryptedPass = crypto.decrypt(viewer.getPasswordEnc());
@@ -125,14 +124,42 @@ public class NvrDeviceService {
     public DeviceDto create(Long ownerIdIgnored, CreateDeviceReq req) {
         // Берём контекст пользователя (userId, лимит и т.д.)
         var ctx = userCtxOrThrow();
-        long used = repo.countByOwnerId(ctx.userId());
-        Integer max = ctx.maxCameras(); // может быть null
-        // int max = ctx.maxCameras() != null ? ctx.maxCameras() : 1;
-
-//        if (used >= max) {
-//            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Достигнуто максимальное кол-во камер: " + max);
-//        }
-
+        
+        // НОВАЯ МОДЕЛЬ: addressId обязателен при создании NVR
+        if (req.getAddressId() == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "addressId is required. NVR must be attached to an Address."
+            );
+        }
+        
+        // Получаем Address и проверяем доступ
+        var address = addressRepo.findById(req.getAddressId())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Address not found: " + req.getAddressId()
+                ));
+        
+        // Проверяем доступ: супер-админ может создавать NVR для любого адреса,
+        // обычный пользователь - только если адрес принадлежит ему или он имеет доступ через addressId
+        if (!isSuperAdmin(ctx)) {
+            // Проверяем, что пользователь имеет доступ к этому адресу
+            // (через свой addressId в AppUser или через ownerId адреса)
+            Long userAddressId = getUserAddressId(ctx.userId());
+            if (userAddressId == null || !userAddressId.equals(address.getId())) {
+                // Если у пользователя нет прямого addressId, проверяем ownerId адреса
+                if (!address.getOwnerId().equals(ctx.userId())) {
+                    throw new ResponseStatusException(
+                            HttpStatus.FORBIDDEN,
+                            "Address does not belong to user or user does not have access"
+                    );
+                }
+            }
+        }
+        
+        // Проверяем лимит камер (по addressId, а не по ownerId)
+        long used = repo.countByAddressEntity_Id(address.getId());
+        Integer max = ctx.maxCameras();
         if (max != null && used >= max) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
@@ -140,24 +167,12 @@ public class NvrDeviceService {
             );
         }
 
-        // Разрешаем addressId -> Address (если прислали)
-        //    Здесь мы выполняем бизнес-правило:
-        //    "нельзя привязать NVR к чужому адресу"
-        var address = req.getAddressId() != null
-                ? addressRepo.findById(req.getAddressId())
-                .filter(a -> a.getOwnerId().equals(ctx.userId()))
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND,
-                        "Адрес не найден или не принадлежит пользователю"
-                ))
-                : null;
-
         int camerasCount = req.getCamerasCount() != null ? req.getCamerasCount() : 0;
         String timezone = (req.getTimezone() == null || req.getTimezone().isBlank()) ? "UTC" : req.getTimezone();
 
-        // Создаём NvrDevice с привязкой к адресу (если есть)
+        // Создаём NvrDevice с привязкой к адресу (обязательно)
         var dev = repo.save(NvrDevice.builder()
-                .ownerId(ctx.userId())
+                .ownerId(null)  // DEPRECATED: больше не используем ownerId
                 .name(req.getName())
                 .ip(req.getIp())
                 .port(req.getPort())
@@ -165,7 +180,7 @@ public class NvrDeviceService {
                 .address(req.getAddress())      // legacy-строка, можно будет выпилить позже
                 .vendor(req.getVendor())
                 .timezone(timezone)
-                .addressEntity(address)         //поле связи с Address
+                .addressEntity(address)         // ОБЯЗАТЕЛЬНО: поле связи с Address
                 .camerasCount(camerasCount)
                 .build());
 
@@ -215,6 +230,33 @@ public class NvrDeviceService {
         return toDto(dev);
     }
 
+    /**
+     * Получает addressId пользователя из JWT claims или через auth-service API.
+     * TODO: Добавить addressId в JWT claims в auth-service для оптимизации.
+     */
+    private Long getUserAddressId(Long userId) {
+        // Пока что получаем из JWT claims (если есть)
+        // В будущем можно добавить addressId в JWT claims в auth-service
+        try {
+            var attrs = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+            if (attrs != null) {
+                var auth = SecurityContextHolder.getContext().getAuthentication();
+                if (auth != null && auth.getDetails() instanceof java.util.Map) {
+                    @SuppressWarnings("unchecked")
+                    var details = (java.util.Map<String, Object>) auth.getDetails();
+                    Object addrId = details.get("addressId");
+                    if (addrId instanceof Number) {
+                        return ((Number) addrId).longValue();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Could not get addressId from JWT claims: {}", e.getMessage());
+        }
+        // Если нет в claims, возвращаем null (будет проверка через ownerId адреса)
+        return null;
+    }
+
     @Transactional(readOnly = true)
     public NvrDevice get(Long ownerIdIgnored, Long id) {
         var ctx = userCtxOrThrow();
@@ -224,6 +266,14 @@ public class NvrDeviceService {
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
         }
 
+        // НОВАЯ МОДЕЛЬ: получаем устройства через addressId пользователя
+        Long userAddressId = getUserAddressId(ctx.userId());
+        if (userAddressId != null) {
+            return repo.findByIdAndAddressEntity_Id(id, userAddressId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+        }
+        
+        // Fallback: если addressId нет, используем старую логику через ownerId (для обратной совместимости)
         return repo.findByIdAndOwnerId(id, ctx.userId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
     }
@@ -236,7 +286,15 @@ public class NvrDeviceService {
         if (isSuperAdmin(ctx)) {
             page = repo.findAll(pageable);
         } else {
-            page = repo.findByOwnerId(ctx.userId(), pageable);
+            // НОВАЯ МОДЕЛЬ: получаем устройства через addressId пользователя
+            Long userAddressId = getUserAddressId(ctx.userId());
+            if (userAddressId != null) {
+                page = repo.findByAddressEntity_Id(userAddressId, pageable);
+            } else {
+                // Fallback: если addressId нет, используем старую логику через ownerId (для обратной совместимости)
+                log.warn("User {} has no addressId, using deprecated ownerId-based lookup", ctx.userId());
+                page = repo.findByOwnerId(ctx.userId(), pageable);
+            }
         }
 
         return page.map(this::toDto);
@@ -269,8 +327,16 @@ public class NvrDeviceService {
             device = repo.findById(id)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
         } else {
-            device = repo.findByIdAndOwnerId(id, ctx.userId())
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+            // НОВАЯ МОДЕЛЬ: получаем устройства через addressId пользователя
+            Long userAddressId = getUserAddressId(ctx.userId());
+            if (userAddressId != null) {
+                device = repo.findByIdAndAddressEntity_Id(id, userAddressId)
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+            } else {
+                // Fallback: если addressId нет, используем старую логику через ownerId (для обратной совместимости)
+                device = repo.findByIdAndOwnerId(id, ctx.userId())
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+            }
         }
 
         if (req.getName() != null) device.setName(req.getName());
@@ -287,69 +353,29 @@ public class NvrDeviceService {
 
         if (req.getAddressId() != null) {
             var newAddress = addressRepo.findById(req.getAddressId())
-                    .filter(a -> isSuperAdmin(ctx) || a.getOwnerId().equals(ctx.userId()))
                     .orElseThrow(() -> new ResponseStatusException(
                             HttpStatus.NOT_FOUND,
-                            "Address not found or does not belong to user"
+                            "Address not found: " + req.getAddressId()
                     ));
+            
+            // Проверяем доступ к новому адресу
+            if (!isSuperAdmin(ctx)) {
+                Long userAddressId = getUserAddressId(ctx.userId());
+                if (userAddressId == null || !userAddressId.equals(newAddress.getId())) {
+                    if (!newAddress.getOwnerId().equals(ctx.userId())) {
+                        throw new ResponseStatusException(
+                                HttpStatus.FORBIDDEN,
+                                "Address does not belong to user or user does not have access"
+                        );
+                    }
+                }
+            }
+            
             device.setAddressEntity(newAddress);
         }
 
         repo.save(device);
         return toDto(device);
-    }
-
-    /**
-     * Заменяет user_default на user_admin для указанного устройства.
-     * Сохраняет username и password, меняет только role.
-     * 
-     * @param deviceId ID устройства
-     * @return true если замена выполнена успешно, false если user_default не найден
-     */
-    @Transactional
-    public boolean replaceUserDefaultWithAdmin(Long deviceId) {
-        // Находим user_default
-        var userDefault = deviceUsers.findByDeviceIdAndRole(deviceId, "user_default");
-        
-        if (userDefault.isEmpty()) {
-            log.warn("No user_default found for device {}", deviceId);
-            return false;
-        }
-        
-        var user = userDefault.get();
-        log.info("Found user_default for device {}: username={}", deviceId, user.getUsername());
-        
-        // Проверяем, не существует ли уже user_admin
-        var existingAdmin = deviceUsers.findByDeviceIdAndRole(deviceId, "user_admin");
-        if (existingAdmin.isPresent()) {
-            log.warn("user_admin already exists for device {}, deleting user_default only", deviceId);
-            deviceUsers.delete(user);
-            return true;
-        }
-        
-        // Сохраняем данные
-        String username = user.getUsername();
-        String passwordEnc = user.getPasswordEnc();
-        var createdAt = user.getCreatedAt();
-        var device = user.getDevice();
-        
-        // Удаляем user_default
-        deviceUsers.delete(user);
-        log.debug("Deleted user_default for device {}", deviceId);
-        
-        // Создаём user_admin с теми же данными
-        var adminUser = NvrDeviceUser.builder()
-                .device(device)
-                .role("user_admin")
-                .username(username)
-                .passwordEnc(passwordEnc)
-                .createdAt(createdAt)
-                .build();
-        
-        deviceUsers.save(adminUser);
-        log.info("Created user_admin for device {}: username={}", deviceId, username);
-        
-        return true;
     }
 
     /**
@@ -373,57 +399,6 @@ public class NvrDeviceService {
         }
 
         List<NvrCamera> cameras = cameraRepo.findByDeviceId(deviceId);
-        return camerasToDto(cameras);
-    }
-
-    /**
-     * Получает все камеры текущего пользователя.
-     *
-     * @return список всех камер пользователя
-     */
-    @Transactional(readOnly = true)
-    public List<ChannelDto> getAllCameras() {
-        var ctx = userCtxOrThrow();
-        List<NvrCamera> cameras;
-        
-        if (isSuperAdmin(ctx)) {
-            cameras = cameraRepo.findAll();
-        } else {
-            cameras = cameraRepo.findByDeviceOwnerId(ctx.userId());
-        }
-        
-        return camerasToDto(cameras);
-    }
-
-    /**
-     * Получает все камеры устройств, привязанных к указанному адресу.
-     *
-     * @param addressId ID адреса
-     * @return список камер по адресу
-     */
-    @Transactional(readOnly = true)
-    public List<ChannelDto> getCamerasByAddress(Long addressId) {
-        var ctx = userCtxOrThrow();
-        List<NvrCamera> cameras;
-        
-        if (isSuperAdmin(ctx)) {
-            cameras = cameraRepo.findByDeviceAddressId(addressId);
-        } else {
-            // Проверяем, что адрес принадлежит пользователю
-            addressRepo.findById(addressId)
-                    .filter(a -> a.getOwnerId().equals(ctx.userId()))
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Address not found"));
-            
-            cameras = cameraRepo.findByDeviceOwnerIdAndAddressId(ctx.userId(), addressId);
-        }
-        
-        return camerasToDto(cameras);
-    }
-
-    /**
-     * Преобразует список камер в список ChannelDto.
-     */
-    private List<ChannelDto> camerasToDto(List<NvrCamera> cameras) {
         return cameras.stream()
                 .sorted((a, b) -> Integer.compare(a.getChannelNo(), b.getChannelNo()))
                 .map(camera -> {
@@ -520,8 +495,16 @@ public class NvrDeviceService {
             device = repo.findById(id)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
         } else {
-            device = repo.findByIdAndOwnerId(id, ctx.userId())
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+            // НОВАЯ МОДЕЛЬ: получаем устройства через addressId пользователя
+            Long userAddressId = getUserAddressId(ctx.userId());
+            if (userAddressId != null) {
+                device = repo.findByIdAndAddressEntity_Id(id, userAddressId)
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+            } else {
+                // Fallback: если addressId нет, используем старую логику через ownerId (для обратной совместимости)
+                device = repo.findByIdAndOwnerId(id, ctx.userId())
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+            }
         }
         
         Long deviceId = device.getId();
@@ -549,13 +532,24 @@ public class NvrDeviceService {
             // супер-админ видит все устройства по адресу, независимо от владельца
             page = repo.findByAddressEntity_Id(addressId, pageable);
         } else {
-            // 1) Проверяем, что адрес принадлежит этому пользователю
-            addressRepo.findById(addressId)
-                    .filter(a -> a.getOwnerId().equals(ctx.userId()))
+            // 1) Проверяем, что пользователь имеет доступ к этому адресу
+            var address = addressRepo.findById(addressId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Address not found"));
+            
+            Long userAddressId = getUserAddressId(ctx.userId());
+            boolean hasAccess = false;
+            if (userAddressId != null && userAddressId.equals(addressId)) {
+                hasAccess = true;
+            } else if (address.getOwnerId().equals(ctx.userId())) {
+                hasAccess = true;
+            }
+            
+            if (!hasAccess) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Address not accessible");
+            }
 
-            // 2) Берём все NVR по адресу
-            page = repo.findByOwnerIdAndAddressEntity_Id(ctx.userId(), addressId, pageable);
+            // 2) Берём все NVR по адресу (новая модель: только по addressId)
+            page = repo.findByAddressEntity_Id(addressId, pageable);
         }
 
         // 3) Конвертируем в DTO
