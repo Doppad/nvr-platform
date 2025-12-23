@@ -401,49 +401,94 @@ public class NvrDeviceService {
         List<NvrCamera> cameras = cameraRepo.findByDeviceId(deviceId);
         return cameras.stream()
                 .sorted((a, b) -> Integer.compare(a.getChannelNo(), b.getChannelNo()))
-                .map(camera -> {
-                    ChannelDto dto = new ChannelDto();
-                    // Основные поля
-                    dto.setChannelNumber(camera.getChannelNo());
-                    dto.setChannelNo(camera.getChannelNo()); // alias
-                    dto.setName(camera.getName());
-                    dto.setRtspUrl(camera.getRtspUrl());
-                    
-                    // Новые поля статусов
-                    Boolean hasCamera = camera.getHasCamera() != null ? camera.getHasCamera() : false;
-                    dto.setHasCamera(hasCamera);
-                    
-                    String nvrStatus = camera.getNvrStatus() != null ? camera.getNvrStatus() : "UNKNOWN";
-                    dto.setNvrStatus(nvrStatus);
-                    
-                    String rtspStatus = camera.getRtspStatus() != null ? camera.getRtspStatus() : "NONE";
-                    dto.setRtspStatus(rtspStatus);
-                    
-                    // Вычисляем uiStatus по новым правилам
-                    String uiStatus = computeUiStatus(hasCamera, nvrStatus, rtspStatus);
-                    dto.setUiStatus(uiStatus);
-                    
-                    // visible = has_camera (пустые каналы всегда скрыты)
-                    dto.setVisible(hasCamera);
-                    
-                    // Legacy поля для обратной совместимости
-                    // Если статус UNKNOWN, но has_camera=true, не считаем как ошибку (RTSP проверка еще не выполнена)
-                    boolean isActive = "ONLINE".equals(uiStatus) || ("UNKNOWN".equals(uiStatus) && hasCamera);
-                    dto.setActive(isActive);
-                    dto.setIsActive(isActive);
-                    dto.setStatus(camera.getStatus()); // legacy поле
-                    
-                    // Дополнительные поля
-                    dto.setId(camera.getId());
-                    dto.setIpAddress(camera.getIpAddress());
-                    dto.setPort(camera.getPort());
-                    dto.setDeviceName(camera.getDeviceName());
-                    dto.setChannelName(camera.getChannelName());
-                    dto.setProtocol(camera.getProtocol());
-                    dto.setType(camera.getType());
-                    return dto;
-                })
+                .map(this::cameraToDto)
                 .toList();
+    }
+
+    /**
+     * Получает все камеры текущего пользователя.
+     * Использует новую модель через addressId или fallback на ownerId.
+     *
+     * @return список всех камер пользователя
+     */
+    @Transactional(readOnly = true)
+    public List<ChannelDto> getAllCameras() {
+        var ctx = userCtxOrThrow();
+        List<NvrCamera> cameras;
+
+        if (isSuperAdmin(ctx)) {
+            // SUPER_ADMIN видит все камеры
+            cameras = cameraRepo.findAll();
+        } else {
+            // НОВАЯ МОДЕЛЬ: получаем камеры через addressId пользователя
+            Long userAddressId = getUserAddressId(ctx.userId());
+            if (userAddressId != null) {
+                cameras = cameraRepo.findByDeviceAddressId(userAddressId);
+            } else {
+                // Fallback: если addressId нет, используем старую логику через ownerId (для обратной совместимости)
+                log.warn("User {} has no addressId, using deprecated ownerId-based lookup for cameras", ctx.userId());
+                cameras = cameraRepo.findByDeviceOwnerId(ctx.userId());
+            }
+        }
+
+        return cameras.stream()
+                .sorted((a, b) -> {
+                    // Сортируем сначала по deviceId, потом по channelNo
+                    int deviceCompare = Long.compare(
+                            a.getDevice().getId(),
+                            b.getDevice().getId()
+                    );
+                    if (deviceCompare != 0) return deviceCompare;
+                    return Integer.compare(a.getChannelNo(), b.getChannelNo());
+                })
+                .map(this::cameraToDto)
+                .toList();
+    }
+
+    /**
+     * Преобразует NvrCamera в ChannelDto.
+     */
+    private ChannelDto cameraToDto(NvrCamera camera) {
+        ChannelDto dto = new ChannelDto();
+        // Основные поля
+        dto.setChannelNumber(camera.getChannelNo());
+        dto.setChannelNo(camera.getChannelNo()); // alias
+        dto.setName(camera.getName());
+        dto.setRtspUrl(camera.getRtspUrl());
+        
+        // Новые поля статусов
+        Boolean hasCamera = camera.getHasCamera() != null ? camera.getHasCamera() : false;
+        dto.setHasCamera(hasCamera);
+        
+        String nvrStatus = camera.getNvrStatus() != null ? camera.getNvrStatus() : "UNKNOWN";
+        dto.setNvrStatus(nvrStatus);
+        
+        String rtspStatus = camera.getRtspStatus() != null ? camera.getRtspStatus() : "NONE";
+        dto.setRtspStatus(rtspStatus);
+        
+        // Вычисляем uiStatus по новым правилам
+        String uiStatus = computeUiStatus(hasCamera, nvrStatus, rtspStatus);
+        dto.setUiStatus(uiStatus);
+        
+        // visible = has_camera (пустые каналы всегда скрыты)
+        dto.setVisible(hasCamera);
+        
+        // Legacy поля для обратной совместимости
+        // Если статус UNKNOWN, но has_camera=true, не считаем как ошибку (RTSP проверка еще не выполнена)
+        boolean isActive = "ONLINE".equals(uiStatus) || ("UNKNOWN".equals(uiStatus) && hasCamera);
+        dto.setActive(isActive);
+        dto.setIsActive(isActive);
+        dto.setStatus(camera.getStatus()); // legacy поле
+        
+        // Дополнительные поля
+        dto.setId(camera.getId());
+        dto.setIpAddress(camera.getIpAddress());
+        dto.setPort(camera.getPort());
+        dto.setDeviceName(camera.getDeviceName());
+        dto.setChannelName(camera.getChannelName());
+        dto.setProtocol(camera.getProtocol());
+        dto.setType(camera.getType());
+        return dto;
     }
 
     /**

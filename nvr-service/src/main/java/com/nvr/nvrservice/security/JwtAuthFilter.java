@@ -32,8 +32,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
         final String authHeader = request.getHeader("Authorization");
 
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            final String jwt = authHeader.substring(7);
+        // Нормализуем заголовок: убираем лишние пробелы и проверяем регистр
+        String normalizedHeader = authHeader != null ? authHeader.trim() : null;
+
+        if (normalizedHeader != null && normalizedHeader.length() > 7 
+                && normalizedHeader.substring(0, 7).equalsIgnoreCase("Bearer ")) {
+            final String jwt = normalizedHeader.substring(7).trim();
             try {
                 var key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
                 Claims claims = Jwts.parserBuilder()
@@ -83,9 +87,14 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     SecurityContextHolder.clearContext();
                 }
             } catch (Exception e) {
-                log.debug("JWT validation failed: {} - {}", e.getClass().getSimpleName(), e.getMessage());
+                log.warn("JWT validation failed for {}: {} - {}", 
+                        request.getRequestURI(), e.getClass().getSimpleName(), e.getMessage());
                 SecurityContextHolder.clearContext();
             }
+        } else if (authHeader != null) {
+            // Если заголовок Authorization есть, но не в формате Bearer - логируем для отладки
+            log.debug("Authorization header found but not in Bearer format for {}: {}", 
+                    request.getRequestURI(), authHeader.substring(0, Math.min(20, authHeader.length())));
         }
 
         chain.doFilter(request, response);

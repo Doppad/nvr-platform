@@ -1,6 +1,8 @@
 package com.nvr.nvrservice.api;
 
+import com.nvr.nvrservice.api.dto.ChannelDto;
 import com.nvr.nvrservice.repo.NvrCameraRepo;
+import com.nvr.nvrservice.service.NvrDeviceService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +26,19 @@ import java.util.stream.Collectors;
 public class CameraController {
 
     private final NvrCameraRepo cameraRepo;
+    private final NvrDeviceService deviceService;
+
+    /**
+     * Получает все камеры текущего пользователя.
+     * Возвращает массив всех камер (каналов) всех устройств пользователя.
+     *
+     * @return список всех камер пользователя
+     */
+    @GetMapping
+    public ResponseEntity<List<ChannelDto>> getAllCameras() {
+        List<ChannelDto> cameras = deviceService.getAllCameras();
+        return ResponseEntity.ok(cameras);
+    }
 
     /**
      * Проверяет принадлежность камер пользователю.
