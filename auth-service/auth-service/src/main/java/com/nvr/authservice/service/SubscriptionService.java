@@ -48,11 +48,15 @@ public class SubscriptionService {
         if (active.isEmpty()) {
             var free = planRepo.findByCode("FREE").orElseThrow(() -> new IllegalStateException("FREE план отсутствует в БД"));
 
-            return Map.of(
-                    "plan", free.getCode(),                 // "FREE"
-                    "archiveDays", free.getArchiveDays(),   // 14
-                    "role", user.getRole() == null ? "USER" : user.getRole()
-            );
+            Map<String, Object> claims = new java.util.HashMap<>();
+            claims.put("plan", free.getCode());                 // "FREE"
+            claims.put("archiveDays", free.getArchiveDays());   // 14
+            claims.put("role", user.getRole() == null ? "USER" : user.getRole());
+            // Добавляем addressId пользователя в JWT claims (переход к глобальным Address)
+            if (user.getAddressId() != null) {
+                claims.put("addressId", user.getAddressId());
+            }
+            return claims;
         }
 
         // Если подписок несколько - выбираем самую сильную по глубине архива
@@ -63,11 +67,15 @@ public class SubscriptionService {
         var plan = bestSub.getPlan();
 
         // Сейчас CAM_1 и CAM_3 оба дают нам 30 дней
-        return Map.of(
-                "plan", plan.getCode(),
-                "archiveDays", plan.getArchiveDays(),
-                "role", user.getRole() == null ? "USER" : user.getRole()
-        );
+        Map<String, Object> claims = new java.util.HashMap<>();
+        claims.put("plan", plan.getCode());
+        claims.put("archiveDays", plan.getArchiveDays());
+        claims.put("role", user.getRole() == null ? "USER" : user.getRole());
+        // Добавляем addressId пользователя в JWT claims (переход к глобальным Address)
+        if (user.getAddressId() != null) {
+            claims.put("addressId", user.getAddressId());
+        }
+        return claims;
     }
 
     public Map<String, Object> claimsForUser(long userId) {

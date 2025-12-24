@@ -17,7 +17,16 @@ public class Address {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    // Владелец адреса = userId из JWT (метаданные, nullable)
+    /**
+     * Владелец адреса = userId из JWT (метаданные, nullable, deprecated).
+     * 
+     * ПЕРЕХОД К ГЛОБАЛЬНЫМ ADDRESS:
+     * - Address теперь глобальные (не привязаны к ownerId)
+     * - ownerId оставлен как metadata для обратной совместимости
+     * - ownerId больше НЕ используется как ограничение доступа
+     * - Пользователь имеет один активный addressId (хранится в User.addressId)
+     */
+    @Deprecated
     @Column(name = "owner_id", nullable = true)
     private Long ownerId;
 

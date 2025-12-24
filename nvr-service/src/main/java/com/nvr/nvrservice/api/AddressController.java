@@ -19,38 +19,39 @@ public class AddressController {
 
     private final AddressService service;
 
+    /**
+     * ПЕРЕХОД К ГЛОБАЛЬНЫМ ADDRESS:
+     * - Address теперь глобальные (не привязаны к ownerId)
+     * - Пользователь видит только свой назначенный addressId (из UserContext)
+     * - Создание Address доступно только через админку (/admin/api/addresses)
+     */
     @GetMapping
     public List<AddressDto> list() {
-        Long ownerId = currentUserId();     // достал userId из контекста
-        List<Address> addresses = service.getForOwner(ownerId);     // бизнес-логика в сервисе
-        return addresses.stream()       // превращаю сущности в DTO
-                .map(a -> new AddressDto(
-                        String.format("%06d", a.getId()),
-                        a.getLabel(),
-                        a.getCity(),
-                        a.getStreet(),
-                        a.getHouse(),
-                        a.getApartment(),
-                        a.getComment()
-                ))
-                .toList();
+        // Пользователь видит только свой назначенный addressId (глобальный Address)
+        Address address = service.getUserAddress();
+        if (address == null) {
+            return List.of(); // Пользователь без addressId - возвращаем пустой список
+        }
+        // Возвращаем только один адрес пользователя
+        return List.of(new AddressDto(
+                String.format("%06d", address.getId()),
+                address.getLabel(),
+                address.getCity(),
+                address.getStreet(),
+                address.getHouse(),
+                address.getApartment(),
+                address.getComment()
+        ));
     }
 
-    @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
-    public AddressDto create(@RequestBody CreateAddressRequest req) {
-        Long ownerId = currentUserId();             // опять userId из токена
-        Address a = service.create(ownerId, req);   // бизнес-логика = сервис
-        return new AddressDto(                      // отдаю DTO наружу
-                String.format("%06d", a.getId()),
-                a.getLabel(),
-                a.getCity(),
-                a.getStreet(),
-                a.getHouse(),
-                a.getApartment(),
-                a.getComment()
-        );
-    }
+    /**
+     * УДАЛЕНО: Создание Address через обычные API больше не доступно.
+     * ПЕРЕХОД К ГЛОБАЛЬНЫМ ADDRESS:
+     * - Address теперь глобальные и создаются только через админку (/admin/api/addresses)
+     * - Пользователь не может создавать новые Address
+     * - При регистрации пользователю автоматически назначается addressId
+     */
+    // @PostMapping - удален, создание только через админку
 
     private Long currentUserId() {
         var auth = SecurityContextHolder.getContext().getAuthentication();

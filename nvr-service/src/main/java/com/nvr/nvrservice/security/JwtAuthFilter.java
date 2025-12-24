@@ -72,6 +72,16 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 Integer maxCameras = claims.get("maxCameras", Integer.class);
                 Integer archiveDays = claims.get("archiveDays", Integer.class);
                 String role = claims.get("role", String.class);
+                // Извлекаем addressId из JWT claims (переход к глобальным Address)
+                Long addressId = null;
+                Object addressIdObj = claims.get("addressId");
+                if (addressIdObj instanceof Number n) {
+                    addressId = n.longValue();
+                } else if (addressIdObj instanceof String s) {
+                    try {
+                        addressId = Long.valueOf(s);
+                    } catch (NumberFormatException ignored) {}
+                }
                 // if (maxCameras == null) maxCameras = null; // или просто не трогать
                 if (archiveDays == null) archiveDays = 14;
 
@@ -81,7 +91,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     SecurityContextHolder.getContext().setAuthentication(auth);
 
                     // Кладём наш контекст в request-атрибут (забираем его в сервисах при необходимости)
-                    request.setAttribute("userContext", new UserContext(userId, role, plan, maxCameras, archiveDays));
+                    // addressId теперь включен в UserContext для доступа к глобальным Address
+                    request.setAttribute("userContext", new UserContext(userId, role, plan, maxCameras, archiveDays, addressId));
                 } else {
                     log.debug("JWT parsed but userId is NULL (sub={})", claims.getSubject());
                     SecurityContextHolder.clearContext();

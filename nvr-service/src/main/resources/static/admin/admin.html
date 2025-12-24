@@ -197,7 +197,7 @@
 <body>
 <h1>Око Монитор</h1>
 <p class="hint">
-    Демонстрационная панель | <a href="/admin/channels.html">Управление каналами</a>
+    Демонстрационная панель
 </p>
 
 <!-- NVR-устройства - перемещены в самый верх -->
@@ -639,7 +639,7 @@
                 <td>
                     <button type="button" class="btn-link" data-toggle-channels="${d.id}">Каналы</button>
                     <button type="button" class="btn-link" data-sync-device="${d.id}" style="margin-left: 8px;" title="Синхронизировать каналы">🔄</button>
-                    <button type="button" class="btn-link" onclick="openEditDeviceModal(${d.id}, '${(d.name || '').replace(/'/g, "\\'")}', '${(d.ip || '').replace(/'/g, "\\'")}', ${d.port || 8082}, ${d.httpPort || d.port || 8082}, '${(d.vendor || '').replace(/'/g, "\\'")}', '${(d.timezone || '').replace(/'/g, "\\'")}', ${d.camerasCount || 0}, ${d.address?.id || 'null'})" style="margin-left: 8px;">✏️ Редактировать</button>
+                    <button type="button" class="btn-link" onclick="openEditDeviceModal(${d.id}, '${(d.name || '').replace(/'/g, "\\'")}', '${(d.ip || '').replace(/'/g, "\\'")}', ${d.port || 8082}, ${d.httpPort || d.port || 8082}, '${(d.vendor || '').replace(/'/g, "\\'")}', '${(d.timezone || '').replace(/'/g, "\\'")}', ${d.camerasCount || 0}, ${d.address?.id ?? null})" style="margin-left: 8px;">✏️ Редактировать</button>
                     <button type="button" class="danger" data-delete-id="${d.id}">Удалить</button>
                 </td>
             `;
@@ -1178,11 +1178,27 @@
         document.getElementById('editDeviceTimezone').value = currentTimezone || '';
         document.getElementById('editDeviceCamerasCount').value = currentCamerasCount || 0;
         
+        // Сохраняем текущий addressId в dataset, чтобы не потерять его при сохранении
+        if (currentAddressId != null && currentAddressId !== 'null' && currentAddressId !== '') {
+            modal.dataset.currentAddressId = String(currentAddressId);
+        } else {
+            modal.dataset.currentAddressId = '';
+        }
+        
         // Загружаем список адресов в select
         loadAddressesForEditModal().then(() => {
             const addressSelect = document.getElementById('editDeviceAddressId');
-            if (currentAddressId && currentAddressId !== 'null') {
-                addressSelect.value = currentAddressId;
+            // Устанавливаем текущий адрес, если он есть (проверяем и число, и строку)
+            if (currentAddressId != null && currentAddressId !== 'null' && currentAddressId !== '') {
+                // Преобразуем в строку для сравнения с value в select (value всегда строка)
+                const addressIdStr = String(currentAddressId);
+                // Пытаемся установить значение
+                if (addressSelect.querySelector(`option[value="${addressIdStr}"]`)) {
+                    addressSelect.value = addressIdStr;
+                } else {
+                    // Если опция не найдена (адрес был удален), оставляем пустым
+                    console.warn(`Address ${addressIdStr} not found in select, leaving empty`);
+                }
             }
         });
         
@@ -1217,14 +1233,17 @@
             select.innerHTML = '<option value="">Выберите адрес...</option>';
             addresses.forEach(a => {
                 const opt = document.createElement('option');
-                opt.value = a.id;
+                // Адреса приходят с форматированным ID (строка "000001"), но для value используем числовое значение
+                // Преобразуем строку в число, убирая ведущие нули
+                const numericId = typeof a.id === 'string' ? parseInt(a.id, 10) : a.id;
+                opt.value = String(numericId);
                 opt.textContent = `${a.id} — ${a.label || 'без названия'}`;
                 select.appendChild(opt);
             });
             
-            // Восстанавливаем значение
+            // Восстанавливаем значение (преобразуем в строку для сравнения)
             if (currentValue) {
-                select.value = currentValue;
+                select.value = String(currentValue);
             }
         } catch (error) {
             console.error('Error loading addresses for edit modal:', error);
@@ -1243,7 +1262,14 @@
         const vendor = document.getElementById('editDeviceVendor').value;
         const timezone = document.getElementById('editDeviceTimezone').value.trim() || null;
         const camerasCount = document.getElementById('editDeviceCamerasCount').value ? Number(document.getElementById('editDeviceCamerasCount').value) : null;
-        const addressId = document.getElementById('editDeviceAddressId').value ? Number(document.getElementById('editDeviceAddressId').value) : null;
+        const addressIdSelect = document.getElementById('editDeviceAddressId');
+        // Получаем выбранный адрес из select
+        const selectedAddressId = addressIdSelect.value && addressIdSelect.value !== '' ? Number(addressIdSelect.value) : null;
+        
+        // Если адрес не выбран в select, но был текущий адрес - используем его (чтобы не потерять при сохранении)
+        // Это гарантирует, что адрес не "слетит", если пользователь случайно не выбрал его заново
+        const addressId = selectedAddressId != null ? selectedAddressId : 
+                         (modal.dataset.currentAddressId && modal.dataset.currentAddressId !== '' ? Number(modal.dataset.currentAddressId) : null);
         
         if (!name || !ip || !port) {
             alert('Название, IP и Port обязательны для заполнения');
@@ -1262,9 +1288,14 @@
                 httpPort: httpPort,
                 vendor: vendor || null,
                 timezone: timezone,
-                camerasCount: camerasCount,
-                addressId: addressId
+                camerasCount: camerasCount
             };
+            
+            // Всегда передаем addressId, если он есть (чтобы сохранить текущий адрес или установить новый)
+            // Если addressId null - адрес останется прежним в методе update()
+            if (addressId != null) {
+                payload.addressId = addressId;
+            }
             
             const response = await fetch(`${base}/admin/api/devices/${deviceId}`, {
                 method: 'PUT',

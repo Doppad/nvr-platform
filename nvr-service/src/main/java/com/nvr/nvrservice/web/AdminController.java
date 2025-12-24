@@ -49,7 +49,8 @@ public class AdminController {
                 null,     // роль не задаём — работаем строго от лица пользователя
                 "FREE",   // план можно не использовать
                 null,     // max cameras = unlimited
-                14
+                14,       // archiveDays
+                null      // addressId = null (для админки используется fallback на ownerId)
         );
         var attrs = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
         attrs.getRequest().setAttribute("userContext", ctx);

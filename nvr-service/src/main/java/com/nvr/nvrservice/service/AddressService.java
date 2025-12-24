@@ -40,29 +40,55 @@ public class AddressService {
         return ctx.role() != null && "SUPER_ADMIN".equalsIgnoreCase(ctx.role());
     }
 
-    // getForOwner - дай все адреса этого пользователя
+    /**
+     * ПЕРЕХОД К ГЛОБАЛЬНЫМ ADDRESS:
+     * - Address теперь глобальные (не привязаны к ownerId)
+     * - Для админки: возвращаем все адреса (используется в AdminController)
+     * - Для обычных пользователей: используйте getUserAddress() вместо этого метода
+     * 
+     * @deprecated Используйте getUserAddress() для обычных пользователей
+     */
+    @Deprecated
     public List<Address> getForOwner(Long ownerId) {
         UserContext ctx = userCtxOrThrow();
         if (isSuperAdmin(ctx)) {
-            // SUPER_ADMIN видит все адреса в системе
+            // SUPER_ADMIN видит все адреса в системе (для админки)
             return repository.findAll();
         }
+        // Fallback: для обратной совместимости со старыми данными
         return repository.findByOwnerId(ctx.userId());
     }
+    
+    /**
+     * Получает адрес пользователя по его addressId из UserContext.
+     * ПЕРЕХОД К ГЛОБАЛЬНЫМ ADDRESS: Address теперь глобальные, не привязаны к ownerId.
+     * 
+     * @return Address пользователя или null, если addressId не назначен
+     */
+    public Address getUserAddress() {
+        UserContext ctx = userCtxOrThrow();
+        if (ctx.addressId() == null) {
+            return null;
+        }
+        return repository.findById(ctx.addressId()).orElse(null);
+    }
 
-    /** тут я:
-     * жестко привязываю адрес к владельцу (ownerId из JWT)
-     * задаю сист. поля (createAt, updateAt)
-     * привожу всё к сущности Address
-     * сохр. через репо
-     *
-     * Так я избегаю ситуации, когда фронт внезапно присылает ownerId в теле, и кто-то может создать адрес “от имени другого пользователя”.
-     * Важная идея:
-     * ownerId мы всегда берём из контекста безопасности / токена, а не из JSON.
-      */
+    /**
+     * Создает новый Address (только для админки).
+     * 
+     * ПЕРЕХОД К ГЛОБАЛЬНЫМ ADDRESS:
+     * - Address теперь глобальные (не привязаны к ownerId)
+     * - ownerId сохраняется как metadata для обратной совместимости
+     * - Создание Address доступно только через админку (/admin/api/addresses)
+     * - Обычные пользователи не могут создавать Address
+     * 
+     * @param ownerId ID владельца (metadata, deprecated, используется только для админки)
+     * @param req данные адреса
+     * @return созданный Address
+     */
     public Address create(Long ownerId, CreateAddressRequest req) {
         Address a = new Address();
-        a.setOwnerId(ownerId);
+        a.setOwnerId(ownerId); // metadata для обратной совместимости
         a.setLabel(req.label());
         a.setCity(req.city());
         a.setStreet(req.street());
@@ -74,10 +100,21 @@ public class AddressService {
         return repository.save(a);
     }
 
+    /**
+     * Удаляет Address (только для админки).
+     * 
+     * ПЕРЕХОД К ГЛОБАЛЬНЫМ ADDRESS:
+     * - Address теперь глобальные, проверка ownerId убрана (кроме админки)
+     * - Удаление доступно только через админку
+     * 
+     * @param ownerId ID владельца (deprecated, используется только для админки, не проверяется)
+     * @param addressId ID адреса для удаления
+     */
     @Transactional
     public void delete(Long ownerId, Long addressId) {
+        // ПЕРЕХОД К ГЛОБАЛЬНЫМ ADDRESS: проверка ownerId убрана, Address глобальные
+        // Для админки ownerId может использоваться как metadata, но не как ограничение доступа
         Address address = repository.findById(addressId)
-                .filter(a -> a.getOwnerId().equals(ownerId))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Address not found"));
 
         boolean hasDevices = deviceRepo.existsByAddressEntity_Id(addressId);
