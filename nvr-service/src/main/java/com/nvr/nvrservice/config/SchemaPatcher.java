@@ -36,7 +36,7 @@ public class SchemaPatcher {
     private void ensureColumn(String ddl, String columnName) {
         try {
             jdbcTemplate.execute(ddl);
-            log.info("Ensured nvr_device.{} column exists", columnName);
+            log.debug("Ensured nvr_device.{} column exists", columnName);
         } catch (Exception ex) {
             log.warn("Failed to ensure nvr_device.{} column: {}", columnName, ex.getMessage());
         }
@@ -49,7 +49,7 @@ public class SchemaPatcher {
                     columnName, columnType
             );
             jdbcTemplate.execute(ddl);
-            log.info("Ensured nvr_camera.{} column exists", columnName);
+            log.debug("Ensured nvr_camera.{} column exists", columnName);
             
             // Если это has_camera, заполняем значениями
             if ("has_camera".equals(columnName)) {

@@ -34,11 +34,22 @@ nvr:
 app:
   jwt:
     secret: "change-me-please-change-me-please-32b+"
+  
+  # Настройки Basic Auth для админки
+  # Пароль берётся из переменной окружения ADMIN_AUTH_PASSWORD
+  admin:
+    auth:
+      username: admin
+      password: ${ADMIN_AUTH_PASSWORD:changeme}  # По умолчанию "changeme", если ENV не задан
+
   logging:
     level:
       org.springframework.security: DEBUG
       com.nvr.nvrservice.security: DEBUG
-      org.hibernate: INFO
-      org.springframework.context: INFO
-      org.springframework.beans: INFO
-      org.springframework.boot: INFO
+      org.hibernate: WARN
+      org.springframework.context: WARN
+      org.springframework.beans: WARN
+      org.springframework.boot: WARN
+      org.springframework.web: WARN
+      org.flywaydb: WARN
+      com.zaxxer.hikari: WARN
