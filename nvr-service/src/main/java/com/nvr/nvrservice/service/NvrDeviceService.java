@@ -5,6 +5,7 @@ import com.nvr.nvrservice.api.dto.ChannelDto;
 import com.nvr.nvrservice.api.dto.CreateDeviceReq;
 import com.nvr.nvrservice.api.dto.DeviceDto;
 import com.nvr.nvrservice.api.dto.UpdateDeviceReq;
+import com.nvr.nvrservice.api.dto.UpdateChannelReq;
 import com.nvr.nvrservice.domain.NvrCamera;
 import com.nvr.nvrservice.domain.NvrDevice;
 import com.nvr.nvrservice.domain.NvrDeviceUser;
@@ -339,6 +340,12 @@ public class NvrDeviceService {
             }
         }
 
+        // Сохраняем старые значения для проверки изменений
+        String oldIp = device.getIp();
+        Integer oldPort = device.getPort();
+        Integer oldHttpPort = device.getHttpPort();
+        String oldVendor = device.getVendor();
+        
         if (req.getName() != null) device.setName(req.getName());
         if (req.getIp() != null) device.setIp(req.getIp());
         if (req.getPort() != null) device.setPort(req.getPort());
@@ -362,6 +369,70 @@ public class NvrDeviceService {
         }
 
         repo.save(device);
+        
+        // Проверяем, изменились ли критичные поля, требующие пересинхронизации
+        // Критичные поля: IP, порты, vendor - влияют на подключение к устройству
+        boolean needsResync = false;
+        if (req.getIp() != null && !req.getIp().equals(oldIp)) {
+            needsResync = true;
+            log.info("Device {} IP changed from {} to {}, triggering resync", device.getId(), oldIp, req.getIp());
+        }
+        if (req.getPort() != null && !req.getPort().equals(oldPort)) {
+            needsResync = true;
+            log.info("Device {} port changed from {} to {}, triggering resync", device.getId(), oldPort, req.getPort());
+        }
+        if (req.getHttpPort() != null && !req.getHttpPort().equals(oldHttpPort)) {
+            needsResync = true;
+            log.info("Device {} HTTP port changed from {} to {}, triggering resync", device.getId(), oldHttpPort, req.getHttpPort());
+        }
+        if (req.getVendor() != null && !req.getVendor().equals(oldVendor)) {
+            needsResync = true;
+            log.info("Device {} vendor changed from {} to {}, triggering resync", device.getId(), oldVendor, req.getVendor());
+        }
+        
+        // Если изменились критичные поля - очищаем старые данные перед синхронизацией
+        if (needsResync && "Dahua".equalsIgnoreCase(device.getVendor())) {
+            Long deviceId = device.getId();
+            
+            // Удаляем все старые каналы устройства (они больше не актуальны)
+            List<NvrCamera> oldCameras = cameraRepo.findByDeviceId(deviceId);
+            if (!oldCameras.isEmpty()) {
+                log.info("Deleting {} old cameras for device {} (id={}) before resync after critical field changes", 
+                        oldCameras.size(), device.getName(), deviceId);
+                cameraRepo.deleteAll(oldCameras);
+            }
+            
+            // Обнуляем количество камер - будет обновлено после синхронизации
+            device.setCamerasCount(0);
+            repo.save(device);
+            log.info("Reset camerasCount to 0 for device {} (id={}) before resync", device.getName(), deviceId);
+            
+            // Проверяем, есть ли пользователи для синхронизации
+            boolean hasUsers = !deviceUsers.findByDeviceId(deviceId).isEmpty();
+            if (hasUsers) {
+                log.info("Scheduling resync for updated Dahua device {} (id={}) after critical field changes", 
+                        device.getName(), deviceId);
+                // Запускаем синхронизацию в отдельном потоке после завершения транзакции
+                new Thread(() -> {
+                    try {
+                        // Небольшая задержка, чтобы транзакция точно завершилась
+                        Thread.sleep(500);
+                        log.info("Starting resync for device {} (id={}) after update", device.getName(), deviceId);
+                        syncService.syncDeviceChannels(deviceId);
+                        log.info("Resync completed for device {} (id={}) after update", device.getName(), deviceId);
+                    } catch (Exception e) {
+                        log.error("Failed to resync device {} (id={}) after update: {}", 
+                                device.getName(), deviceId, e.getMessage(), e);
+                    }
+                }, "sync-device-" + deviceId).start();
+            } else {
+                log.warn("Device {} (id={}, ip={}) updated but has no users. " +
+                        "Synchronization will be skipped. " +
+                        "Add at least one user with role 'user_admin' or 'user_default'.",
+                        device.getName(), device.getId(), device.getIp());
+            }
+        }
+        
         return toDto(device);
     }
 
@@ -527,6 +598,57 @@ public class NvrDeviceService {
     }
 
     /**
+     * Обновляет канал NVR.
+     * 
+     * @param ownerIdIgnored игнорируется (используется ctx.userId())
+     * @param deviceId ID устройства
+     * @param channelId ID канала
+     * @param req данные для обновления
+     * @return обновленный канал
+     */
+    @Transactional
+    public ChannelDto updateChannel(Long ownerIdIgnored, Long deviceId, Long channelId, UpdateChannelReq req) {
+        var ctx = userCtxOrThrow();
+
+        // Проверяем доступ к устройству
+        NvrDevice device;
+        if (isSuperAdmin(ctx)) {
+            device = repo.findById(deviceId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+        } else {
+            device = repo.findByIdAndOwnerId(deviceId, ctx.userId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+        }
+
+        // Находим канал и проверяем, что он принадлежит этому устройству
+        NvrCamera camera = cameraRepo.findById(channelId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Channel not found"));
+
+        if (!camera.getDevice().getId().equals(deviceId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Channel does not belong to this device");
+        }
+
+        // Обновляем поля
+        if (req.getName() != null) {
+            camera.setName(req.getName());
+        }
+        if (req.getRtspUrl() != null) {
+            camera.setRtspUrl(req.getRtspUrl());
+        }
+        if (req.getEnabled() != null) {
+            camera.setEnabled(req.getEnabled());
+            camera.setIsActive(req.getEnabled());
+        }
+
+        // Сохраняем изменения
+        camera = cameraRepo.save(camera);
+
+        log.info("Channel {} updated for device {} by user {}", channelId, deviceId, ctx.userId());
+
+        return cameraToDto(camera);
+    }
+
+    /**
      * Вычисляет UI статус канала на основе has_camera, nvr_status и rtsp_status.
      * 
      * Правила:
@@ -542,6 +664,27 @@ public class NvrDeviceService {
      * ВАЖНО: ONLINE_NO_STREAM не считается ошибкой - это предупреждение (WARNING).
      * Ошибками считаются только OFFLINE камеры.
      */
+    /**
+     * Вычисляет UI статус канала на основе has_camera, nvr_status и rtsp_status.
+     * 
+     * Правила:
+     * - Если has_camera == false → HIDDEN (пустые каналы не считаются ошибкой)
+     * - Если has_camera == true:
+     *   - если nvr_status==ONLINE и rtsp_status==OK → ONLINE (зелёный)
+     *   - если nvr_status==ONLINE и rtsp_status==TIMEOUT → ONLINE (зелёный, "поток есть, на проверке")
+     *   - если nvr_status==ONLINE и rtsp_status==FAIL → ONLINE_NO_STREAM (жёлтый, WARNING, НЕ ERROR)
+     *   - если nvr_status==ONLINE и rtsp_status==NONE/null → ONLINE_NO_STREAM (жёлтый, WARNING)
+     *   - если nvr_status==OFFLINE → OFFLINE (красный, ERROR)
+     *   - если nvr_status==UNKNOWN и rtsp_status==OK → ONLINE (защитное поведение: RTSP работает)
+     *   - если nvr_status==UNKNOWN и rtsp_status==TIMEOUT → ONLINE (защитное поведение: считаем онлайн, проверка не завершена)
+     *   - если nvr_status==UNKNOWN и rtsp_status==FAIL → OFFLINE (защитное поведение: RTSP не работает)
+     *   - иначе → UNKNOWN
+     * 
+     * ВАЖНО: 
+     * - ONLINE_NO_STREAM не считается ошибкой - это предупреждение (WARNING).
+     * - TIMEOUT не считается ошибкой - это означает "не успели проверить", показываем как ONLINE (зелёный).
+     * - Ошибками считаются только OFFLINE камеры.
+     */
     private String computeUiStatus(Boolean hasCamera, String nvrStatus, String rtspStatus) {
         if (hasCamera == null || !hasCamera) {
             return "HIDDEN";
@@ -550,7 +693,11 @@ public class NvrDeviceService {
         if ("ONLINE".equals(nvrStatus)) {
             if ("OK".equals(rtspStatus)) {
                 return "ONLINE";
+            } else if ("TIMEOUT".equals(rtspStatus)) {
+                // TIMEOUT = "не успели проверить", но камера ONLINE - показываем как ONLINE (зелёный)
+                return "ONLINE";
             } else {
+                // FAIL, NONE, null - нет потока
                 return "ONLINE_NO_STREAM";
             }
         } else if ("OFFLINE".equals(nvrStatus)) {
@@ -559,6 +706,8 @@ public class NvrDeviceService {
             // Защитное поведение: если nvr_status неизвестен, используем rtsp_status
             if ("OK".equals(rtspStatus)) {
                 return "ONLINE"; // RTSP работает - считаем камеру онлайн
+            } else if ("TIMEOUT".equals(rtspStatus)) {
+                return "ONLINE"; // TIMEOUT - считаем онлайн, проверка не завершена
             } else if ("FAIL".equals(rtspStatus)) {
                 return "OFFLINE"; // RTSP не работает - считаем камеру оффлайн
             } else {

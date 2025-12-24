@@ -44,8 +44,10 @@ app:
 
   logging:
     level:
-      org.springframework.security: DEBUG
-      com.nvr.nvrservice.security: DEBUG
+      root: INFO
+      com.nvr.nvrservice: INFO
+      org.springframework.security: WARN
+      com.nvr.nvrservice.security: WARN
       org.hibernate: WARN
       org.springframework.context: WARN
       org.springframework.beans: WARN
@@ -53,3 +55,5 @@ app:
       org.springframework.web: WARN
       org.flywaydb: WARN
       com.zaxxer.hikari: WARN
+      org.apache.http: WARN
+      org.springframework.transaction: WARN

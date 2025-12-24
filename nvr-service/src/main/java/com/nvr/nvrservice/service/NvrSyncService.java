@@ -44,7 +44,8 @@ public class NvrSyncService {
     private final RtspHealthChecker rtspHealthChecker;
     
     // Thread pool для асинхронных RTSP проверок каналов
-    private final ExecutorService rtspCheckExecutor = Executors.newFixedThreadPool(16);
+    // Ограничено до 6 потоков для предотвращения перегрузки устройств Dahua
+    private final ExecutorService rtspCheckExecutor = Executors.newFixedThreadPool(6);
     
     // In-memory lock для защиты от параллельных запусков checkRtspHealthForDevice для одного deviceId
     private final ConcurrentHashMap.KeySetView<Long, Boolean> rtspCheckInProgress = ConcurrentHashMap.newKeySet();
@@ -645,10 +646,10 @@ public class NvrSyncService {
                                 boolean isOnline = rtspHealthChecker.isOnline(rtspUrl);
                                 String newRtspStatus = isOnline ? "OK" : "FAIL";
                                 
-                                // Логируем смену состояния только на INFO
+                                // Логируем смену состояния только на DEBUG (слишком много логов)
                                 boolean statusChanged = !newRtspStatus.equals(previousRtspStatus);
                                 if (statusChanged) {
-                                    log.info("RTSP status changed for channel {} (device {}): {} -> {} (nvrStatus={})", 
+                                    log.debug("RTSP status changed for channel {} (device {}): {} -> {} (nvrStatus={})", 
                                             channelFinal.getChannelNo(), deviceId, 
                                             previousRtspStatus != null ? previousRtspStatus : "NONE",
                                             newRtspStatus, nvrStatus);
@@ -716,20 +717,21 @@ public class NvrSyncService {
                                         channelFinal.getChannelNo(), deviceId);
                                 durationTimeouts.incrementAndGet(); // Атомарный инкремент
                                 
-                                // Таймаут = FAIL, но считаем как ERROR только если камера OFFLINE
-                                if ("OFFLINE".equals(channelNvrStatus)) {
-                                    synchronized (errorCount) {
-                                        errorCount[0]++;
-                                    }
-                                } else if ("ONLINE".equals(channelNvrStatus)) {
-                                    synchronized (warningCount) {
-                                        warningCount[0]++;
-                                    }
-                                }
+                                // Устанавливаем TIMEOUT статус при таймауте (не FAIL, чтобы отличать от реального отсутствия потока)
+                                // TIMEOUT означает "не успели проверить", а не "потока нет"
+                                channelFinal.setRtspStatus("TIMEOUT");
+                                channelFinal.setRtspStatusUpdatedAt(now);
+                                
+                                // Таймаут НЕ считается ошибкой или предупреждением - это просто "не успели проверить"
+                                // Статус остается как есть (ONLINE/UNKNOWN), не портим статистику
                             } else {
                                 log.debug("RTSP check exception (non-timeout) for channel {} (device {}): {}", 
                                         channelFinal.getChannelNo(), deviceId, ex.getMessage());
-                                // Не-таймаут исключение обрабатывается аналогично
+                                // Не-таймаут исключение - устанавливаем FAIL
+                                channelFinal.setRtspStatus("FAIL");
+                                channelFinal.setRtspStatusUpdatedAt(now);
+                                
+                                // Определяем ERROR vs WARNING на основе nvrStatus
                                 if ("OFFLINE".equals(channelNvrStatus)) {
                                     synchronized (errorCount) {
                                         errorCount[0]++;
@@ -762,15 +764,19 @@ public class NvrSyncService {
             // Подсчитываем статусы RTSP
             long rtspOk = channels.stream().filter(c -> "OK".equals(c.getRtspStatus())).count();
             long rtspFail = channels.stream().filter(c -> "FAIL".equals(c.getRtspStatus())).count();
+            long rtspTimeout = channels.stream().filter(c -> "TIMEOUT".equals(c.getRtspStatus())).count();
             long rtspNone = channels.stream().filter(c -> "NONE".equals(c.getRtspStatus()) || c.getRtspStatus() == null).count();
             
-            // Логируем итоговую статистику
+            // Логируем итоговую статистику (только при ошибках или предупреждениях)
             if (errorCount[0] > 0) {
-                log.warn("RTSP health check completed for device {} ({} cameras): OK={}, WARNING={} (ONLINE+NO_STREAM), ERROR={} (OFFLINE), timeouts={}", 
-                        deviceId, channels.size(), rtspOk, warningCount[0], errorCount[0], durationTimeouts.get());
+                log.warn("RTSP health check completed for device {} ({} cameras): OK={}, WARNING={} (ONLINE+NO_STREAM), ERROR={} (OFFLINE), TIMEOUT={} (не успели проверить), timeouts={}", 
+                        deviceId, channels.size(), rtspOk, warningCount[0], errorCount[0], rtspTimeout, durationTimeouts.get());
             } else if (warningCount[0] > 0) {
-                log.info("RTSP health check completed for device {} ({} cameras): OK={}, WARNING={} (ONLINE+NO_STREAM), timeouts={}", 
-                        deviceId, channels.size(), rtspOk, warningCount[0], durationTimeouts.get());
+                log.debug("RTSP health check completed for device {} ({} cameras): OK={}, WARNING={} (ONLINE+NO_STREAM), TIMEOUT={} (не успели проверить), timeouts={}", 
+                        deviceId, channels.size(), rtspOk, warningCount[0], rtspTimeout, durationTimeouts.get());
+            } else if (rtspTimeout > 0) {
+                log.debug("RTSP health check completed for device {} ({} cameras): OK={}, TIMEOUT={} (не успели проверить), timeouts={}", 
+                        deviceId, channels.size(), rtspOk, rtspTimeout, durationTimeouts.get());
             } else {
                 log.debug("RTSP health check completed for device {} ({} cameras): OK={}, FAIL={}, NONE={}, timeouts={}", 
                         deviceId, channels.size(), rtspOk, rtspFail, rtspNone, durationTimeouts.get());

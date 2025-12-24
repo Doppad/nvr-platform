@@ -6,6 +6,7 @@ import com.nvr.nvrservice.api.dto.CreateAddressRequest;
 import com.nvr.nvrservice.api.dto.CreateDeviceReq;
 import com.nvr.nvrservice.api.dto.DeviceDto;
 import com.nvr.nvrservice.api.dto.UpdateDeviceReq;
+import com.nvr.nvrservice.api.dto.UpdateChannelReq;
 import com.nvr.nvrservice.service.AddressService;
 import com.nvr.nvrservice.service.NvrDeviceService;
 import com.nvr.nvrservice.service.NvrSyncService;
@@ -155,6 +156,17 @@ public class AdminController {
         attachAdminUser(uid);
         List<ChannelDto> channels = deviceService.getChannels(uid, id);
         return ResponseEntity.ok(channels);
+    }
+
+    @PutMapping("/devices/{deviceId}/channels/{channelId}")
+    public ResponseEntity<?> updateChannel(
+            @PathVariable Long deviceId,
+            @PathVariable Long channelId,
+            @RequestBody UpdateChannelReq req) {
+        Long uid = getAdminUserId();
+        attachAdminUser(uid);
+        ChannelDto channel = deviceService.updateChannel(uid, deviceId, channelId, req);
+        return ResponseEntity.ok(channel);
     }
 
     @PostMapping("/devices/{id}/sync")

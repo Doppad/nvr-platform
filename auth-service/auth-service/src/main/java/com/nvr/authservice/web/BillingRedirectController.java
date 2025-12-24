@@ -52,7 +52,7 @@ public class BillingRedirectController {
         String deeplink = "okodoma://payments/success?paymentId=" + escapeHtml(actualPaymentId);
         return ResponseEntity.ok()
                 .contentType(MediaType.TEXT_HTML)
-                .body(generateRedirectPage(deeplink, "Успешная оплата", "Оплата прошла успешно!"));
+                .body(generateRedirectPage(deeplink, "Успешная оплата", "Оплата прошла успешно!", true));
     }
 
     @GetMapping(value = "/billing/redirect/fail", produces = MediaType.TEXT_HTML_VALUE)
@@ -72,6 +72,68 @@ public class BillingRedirectController {
     }
 
     private String generateRedirectPage(String deeplink, String title, String message) {
+        return generateRedirectPage(deeplink, title, message, false);
+    }
+
+    private String generateRedirectPage(String deeplink, String title, String message, boolean autoClose) {
+        String autoCloseScript = autoClose ? """
+                // Автоматическое закрытие окна после успешной оплаты
+                const urlParams = new URLSearchParams(window.location.search);
+                const orderId = urlParams.get('orderId') || urlParams.get('paymentId') || 'unknown';
+                const processedKey = 'payment_processed_' + orderId;
+                
+                // Проверяем, была ли страница уже обработана
+                if (sessionStorage.getItem(processedKey)) {
+                    // Страница уже была обработана - скрываем кнопку и закрываем окно
+                    document.getElementById("link").style.display = "none";
+                    const pElement = document.getElementById("wrap").querySelector("p");
+                    if (pElement) {
+                        pElement.textContent = "Оплата уже обработана. Окно закроется автоматически.";
+                    }
+                    setTimeout(() => {
+                        window.close();
+                    }, 1000);
+                } else {
+                    // Помечаем страницу как обработанную
+                    sessionStorage.setItem(processedKey, 'true');
+                    // Автоматически открываем диплинк и закрываем окно
+                    window.location.href = deep;
+                    setTimeout(() => {
+                        window.close();
+                    }, 2000);
+                }
+                """ : """
+                // Автоматический редирект на диплинк
+                window.location.href = deep;
+                """;
+        
+        String linkClickHandler = autoClose ? """
+                function handleLinkClick(event) {
+                    event.preventDefault();
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const orderId = urlParams.get('orderId') || urlParams.get('paymentId') || 'unknown';
+                    const processedKey = 'payment_processed_' + orderId;
+                    
+                    // Проверяем, была ли кнопка уже нажата
+                    if (sessionStorage.getItem(processedKey + '_clicked')) {
+                        return false;
+                    }
+                    
+                    // Помечаем кнопку как нажатую
+                    sessionStorage.setItem(processedKey + '_clicked', 'true');
+                    
+                    // Открываем диплинк
+                    window.location.href = deep;
+                    
+                    // Закрываем окно после небольшой задержки
+                    setTimeout(() => {
+                        window.close();
+                    }, 500);
+                    
+                    return false;
+                }
+                """ : "";
+        
         return """
                 <!DOCTYPE html>
                 <html>
@@ -116,9 +178,14 @@ public class BillingRedirectController {
                             border-radius: 8px;
                             font-weight: 500;
                             transition: background 0.3s;
+                            cursor: pointer;
                         }
                         #link:hover {
                             background: #5568d3;
+                        }
+                        #link:disabled {
+                            background: #ccc;
+                            cursor: not-allowed;
                         }
                         #wrap {
                             display: none;
@@ -144,21 +211,34 @@ public class BillingRedirectController {
                         <div id="wrap">
                             <h1>%s</h1>
                             <p>%s</p>
-                            <a href="%s" id="link">Открыть в приложении</a>
+                            <a href="%s" id="link" %s>Открыть в приложении</a>
                         </div>
                     </div>
                     <script>
                         const deep = "%s";
-                        window.location.href = deep;
+                        
+                        %s
+                        
                         setTimeout(() => {
                             document.getElementById("spinner").style.display = "none";
                             document.getElementById("link").href = deep;
                             document.getElementById("wrap").style.display = "block";
                         }, 500);
+                        
+                        %s
                     </script>
                 </body>
                 </html>
-                """.formatted(title, title, message, deeplink, deeplink);
+                """.formatted(
+                    title, 
+                    title, 
+                    message, 
+                    deeplink,
+                    autoClose ? "onclick=\"handleLinkClick(event); return false;\"" : "",
+                    deeplink,
+                    linkClickHandler,
+                    autoCloseScript
+                );
     }
 
     private String escapeHtml(String text) {
