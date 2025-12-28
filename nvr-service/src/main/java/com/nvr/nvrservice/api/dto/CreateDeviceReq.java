@@ -30,6 +30,9 @@ public class CreateDeviceReq {
     @Min(0)
     private Integer camerasCount;
 
+    @Min(1) @Max(256)
+    private Integer maxChannels; // Максимальное количество каналов устройства (16/32/64)
+
     // id адреса, к которому нужно привязать устройство (опционально, можно добавить позже)
     private Long addressId;
     

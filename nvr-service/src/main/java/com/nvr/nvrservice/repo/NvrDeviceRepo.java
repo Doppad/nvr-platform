@@ -28,6 +28,9 @@ public interface NvrDeviceRepo extends JpaRepository<NvrDevice, Long> {
 
     boolean existsByAddressEntity_Id(Long addressId);
     
+    // Поиск устройства по ключу (address_id, ip, port) для find-or-create
+    Optional<NvrDevice> findByAddressEntity_IdAndIpAndPort(Long addressId, String ip, Integer port);
+    
     // DEPRECATED: для обратной совместимости
     @Deprecated
     Page<NvrDevice> findByOwnerIdAndAddressEntity_Id(Long ownerId, Long addressId, Pageable pageable);

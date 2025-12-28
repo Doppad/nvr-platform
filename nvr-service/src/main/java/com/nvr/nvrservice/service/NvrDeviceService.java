@@ -32,6 +32,7 @@ import java.net.Socket;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @Slf4j
 @Service
@@ -188,30 +189,68 @@ public class NvrDeviceService {
         int camerasCount = req.getCamerasCount() != null ? req.getCamerasCount() : 0;
         String timezone = (req.getTimezone() == null || req.getTimezone().isBlank()) ? "UTC" : req.getTimezone();
 
-        // HOTFIX: Гарантируем, что ownerId не будет null (для обратной совместимости с БД)
-        // Если миграция V8/V9 ещё не применена, owner_id может быть NOT NULL
-        // Приоритет: address.getOwnerId() > ctx.userId() > исключение
-        Long ownerIdForDb = address.getOwnerId() != null ? address.getOwnerId() : ctx.userId();
-        if (ownerIdForDb == null) {
-            throw new ResponseStatusException(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    "Cannot determine ownerId: address.ownerId and userContext.userId are both null"
-            );
-        }
+        // Нормализуем IP и порт для поиска/создания
+        String normalizedIp = normalizeIp(req.getIp());
+        Integer normalizedPort = normalizePort(req.getPort());
 
-        // Создаём NvrDevice с привязкой к адресу (обязательно)
-        var dev = repo.save(NvrDevice.builder()
-                .ownerId(ownerIdForDb)  // HOTFIX: гарантированно не null для совместимости с БД
-                .name(req.getName())
-                .ip(req.getIp())
-                .port(req.getPort())
-                .httpPort(req.getHttpPort())    // HTTP порт для API запросов
-                .address(req.getAddress())      // legacy-строка, можно будет выпилить позже
-                .vendor(req.getVendor())
-                .timezone(timezone)
-                .addressEntity(address)         // ОБЯЗАТЕЛЬНО: поле связи с Address
-                .camerasCount(camerasCount)
-                .build());
+        // FIND-OR-CREATE: ищем существующее устройство по ключу (address_id, ip, port)
+        Optional<NvrDevice> existingDevice = repo.findByAddressEntity_IdAndIpAndPort(
+                finalAddressId, normalizedIp, normalizedPort);
+
+        NvrDevice dev;
+        if (existingDevice.isPresent()) {
+            // Обновляем существующее устройство
+            dev = existingDevice.get();
+            log.info("Found existing device {} (id={}) for address {} with ip={}, port={}. Updating...",
+                    dev.getName(), dev.getId(), finalAddressId, normalizedIp, normalizedPort);
+            
+            // Обновляем поля (кроме ключевых: address_id, ip, port)
+            dev.setName(req.getName());
+            if (req.getHttpPort() != null) {
+                dev.setHttpPort(req.getHttpPort());
+            }
+            if (req.getVendor() != null && !req.getVendor().isBlank()) {
+                dev.setVendor(req.getVendor());
+            }
+            dev.setTimezone(timezone);
+            if (camerasCount > 0) {
+                dev.setCamerasCount(camerasCount);
+            }
+            if (req.getMaxChannels() != null) {
+                dev.setMaxChannels(req.getMaxChannels());
+            }
+            
+            dev = repo.save(dev);
+        } else {
+            // Создаём новое устройство
+            // HOTFIX: Гарантируем, что ownerId не будет null (для обратной совместимости с БД)
+            // Если миграция V8/V9 ещё не применена, owner_id может быть NOT NULL
+            // Приоритет: address.getOwnerId() > ctx.userId() > исключение
+            Long ownerIdForDb = address.getOwnerId() != null ? address.getOwnerId() : ctx.userId();
+            if (ownerIdForDb == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.INTERNAL_SERVER_ERROR,
+                        "Cannot determine ownerId: address.ownerId and userContext.userId are both null"
+                );
+            }
+
+            dev = repo.save(NvrDevice.builder()
+                    .ownerId(ownerIdForDb)  // HOTFIX: гарантированно не null для совместимости с БД
+                    .name(req.getName())
+                    .ip(normalizedIp)       // Используем нормализованный IP
+                    .port(normalizedPort)   // Используем нормализованный порт
+                    .httpPort(req.getHttpPort())    // HTTP порт для API запросов
+                    .address(req.getAddress())      // legacy-строка, можно будет выпилить позже
+                    .vendor(req.getVendor())
+                    .timezone(timezone)
+                    .addressEntity(address)         // ОБЯЗАТЕЛЬНО: поле связи с Address
+                    .camerasCount(camerasCount)
+                    .maxChannels(req.getMaxChannels())
+                    .build());
+            
+            log.info("Created new device {} (id={}) for address {} with ip={}, port={}",
+                    dev.getName(), dev.getId(), finalAddressId, normalizedIp, normalizedPort);
+        }
 
         // Сохраняем учётки, если прислали
         if (req.getUsers() != null && !req.getUsers().isEmpty()) {
@@ -236,21 +275,23 @@ public class NvrDeviceService {
         // Используем @TransactionalEventListener или просто запускаем после коммита транзакции
         if ("Dahua".equalsIgnoreCase(dev.getVendor()) && 
             (req.getUsers() != null && !req.getUsers().isEmpty())) {
-            Long deviceId = dev.getId();
+            // Создаем final переменные для использования в лямбде
+            final Long deviceId = dev.getId();
+            final String deviceName = dev.getName();
             log.debug("Scheduling immediate sync for newly created Dahua device {} (id={})", 
-                    dev.getName(), deviceId);
+                    deviceName, deviceId);
             // Запускаем синхронизацию в отдельном потоке после завершения транзакции
             // Используем простой Thread, так как @Async требует дополнительной настройки
             new Thread(() -> {
                 try {
                     // Небольшая задержка, чтобы транзакция точно завершилась
                     Thread.sleep(500);
-                    log.debug("Starting sync for device {} (id={})", dev.getName(), deviceId);
+                    log.debug("Starting sync for device {} (id={})", deviceName, deviceId);
                     syncService.syncDeviceChannels(deviceId);
-                    log.debug("Sync completed for device {} (id={})", dev.getName(), deviceId);
+                    log.debug("Sync completed for device {} (id={})", deviceName, deviceId);
                 } catch (Exception e) {
                     log.error("Failed to sync device {} (id={}): {}", 
-                            dev.getName(), deviceId, e.getMessage(), e);
+                            deviceName, deviceId, e.getMessage(), e);
                 }
             }, "sync-device-" + deviceId).start();
         }
@@ -332,6 +373,54 @@ public class NvrDeviceService {
         } catch (Exception e) {
             return "OFFLINE";
         }
+    }
+
+    /**
+     * Нормализует IP адрес для использования в качестве ключа поиска.
+     * Убирает пробелы, приводит к нижнему регистру, убирает протокол если есть.
+     * 
+     * @param ip исходный IP адрес
+     * @return нормализованный IP адрес
+     */
+    private String normalizeIp(String ip) {
+        if (ip == null || ip.isBlank()) {
+            return ip;
+        }
+        String normalized = ip.trim().toLowerCase();
+        // Убираем протокол если есть (http://, https://)
+        if (normalized.startsWith("http://")) {
+            normalized = normalized.substring(7);
+        } else if (normalized.startsWith("https://")) {
+            normalized = normalized.substring(8);
+        }
+        // Убираем порт если указан в IP (например, 192.168.1.1:8080)
+        int colonIndex = normalized.indexOf(':');
+        if (colonIndex > 0 && !normalized.contains("/")) {
+            // Проверяем, что это не IPv6
+            if (normalized.indexOf(':') == normalized.lastIndexOf(':')) {
+                normalized = normalized.substring(0, colonIndex);
+            }
+        }
+        return normalized.trim();
+    }
+
+    /**
+     * Нормализует порт для использования в качестве ключа поиска.
+     * Проверяет валидность диапазона (1-65535).
+     * 
+     * @param port исходный порт
+     * @return нормализованный порт или null если невалидный
+     */
+    private Integer normalizePort(Integer port) {
+        if (port == null) {
+            return null;
+        }
+        // Проверяем валидный диапазон портов
+        if (port < 1 || port > 65535) {
+            log.warn("Invalid port value: {}. Must be between 1 and 65535", port);
+            return null;
+        }
+        return port;
     }
 
     @Transactional
