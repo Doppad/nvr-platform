@@ -24,8 +24,9 @@ public class BillingRedirectController {
 
     @GetMapping(value = "/billing/redirect/success", produces = MediaType.TEXT_HTML_VALUE)
     public ResponseEntity<String> successRedirect(@RequestParam(required = false) String paymentId,
-                                                  @RequestParam(required = false) String orderId) {
-        log.info("Success redirect page accessed: PaymentId={}, OrderId={}", paymentId, orderId);
+                                                  @RequestParam(required = false) String orderId,
+                                                  @RequestParam(required = false) String cameraIds) {
+        log.info("Success redirect page accessed: PaymentId={}, OrderId={}, CameraIds={}", paymentId, orderId, cameraIds);
         
         // Пытаемся автоматически обработать платеж, если webhook не пришел
         // Это безопасно - метод проверяет статус и не создаст дубликат подписки
@@ -49,7 +50,12 @@ public class BillingRedirectController {
             actualPaymentId = "unknown";
         }
         
+        // Формируем deeplink с cameraIds
         String deeplink = "okodoma://payments/success?paymentId=" + escapeHtml(actualPaymentId);
+        if (cameraIds != null && !cameraIds.isBlank()) {
+            deeplink += "&cameraIds=" + escapeHtml(cameraIds);
+        }
+        
         return ResponseEntity.ok()
                 .contentType(MediaType.TEXT_HTML)
                 .body(generateRedirectPage(deeplink, "Успешная оплата", "Оплата прошла успешно!", true));
@@ -57,7 +63,8 @@ public class BillingRedirectController {
 
     @GetMapping(value = "/billing/redirect/fail", produces = MediaType.TEXT_HTML_VALUE)
     public ResponseEntity<String> failRedirect(@RequestParam(required = false) String paymentId,
-                                               @RequestParam(required = false) String orderId) {
+                                               @RequestParam(required = false) String orderId,
+                                               @RequestParam(required = false) String cameraIds) {
         // Tinkoff может передавать paymentId напрямую, или мы используем orderId из URL
         // Если paymentId передан напрямую - используем его, иначе используем orderId
         String actualPaymentId = paymentId != null ? paymentId : orderId;
@@ -65,7 +72,12 @@ public class BillingRedirectController {
             actualPaymentId = "unknown";
         }
         
+        // Формируем deeplink с cameraIds
         String deeplink = "okodoma://payments/fail?paymentId=" + escapeHtml(actualPaymentId);
+        if (cameraIds != null && !cameraIds.isBlank()) {
+            deeplink += "&cameraIds=" + escapeHtml(cameraIds);
+        }
+        
         return ResponseEntity.ok()
                 .contentType(MediaType.TEXT_HTML)
                 .body(generateRedirectPage(deeplink, "Ошибка оплаты", "Оплата не была завершена."));

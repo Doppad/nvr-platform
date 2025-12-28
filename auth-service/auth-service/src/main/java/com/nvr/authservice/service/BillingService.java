@@ -170,8 +170,14 @@ public class BillingService {
         // Формируем URL для редиректа после оплаты
         // Используем только orderId, так как Тинькофф не подставляет {PaymentId} в URL редиректа
         // PaymentId будет получен из БД при обработке редиректа
-        String successUrl = publicBaseUrl + "/billing/redirect/success?orderId=" + orderId;
-        String failUrl = publicBaseUrl + "/billing/redirect/fail?orderId=" + orderId;
+        // Добавляем cameraIds в URL для передачи в deep link
+        String cameraIdsParam = cameraIds.stream()
+                .map(String::valueOf)
+                .collect(Collectors.joining(","));
+        String successUrl = publicBaseUrl + "/billing/redirect/success?orderId=" + orderId 
+                + "&cameraIds=" + cameraIdsParam;
+        String failUrl = publicBaseUrl + "/billing/redirect/fail?orderId=" + orderId 
+                + "&cameraIds=" + cameraIdsParam;
 
         // Вызываем API Тинькофф для создания платежа
         TinkoffApiClient.TinkoffInitResponse response = tinkoffApiClient.initPayment(
