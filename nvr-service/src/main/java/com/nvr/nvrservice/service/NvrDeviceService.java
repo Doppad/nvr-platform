@@ -634,7 +634,17 @@ public class NvrDeviceService {
         }
 
         List<NvrCamera> cameras = cameraRepo.findByDeviceId(deviceId);
-        return cameras.stream()
+        
+        // Дедупликация по ключу (deviceId, channelNo) на случай дубликатов в БД или размножающих JOIN
+        // Используем LinkedHashMap для сохранения порядка первой встречи
+        Map<String, NvrCamera> uniqueCameras = new LinkedHashMap<>();
+        for (NvrCamera camera : cameras) {
+            // Ключ: deviceId + channelNo (как в уникальном constraint)
+            String key = camera.getDevice().getId() + "_" + camera.getChannelNo();
+            uniqueCameras.putIfAbsent(key, camera);
+        }
+        
+        return uniqueCameras.values().stream()
                 .sorted((a, b) -> Integer.compare(a.getChannelNo(), b.getChannelNo()))
                 .map(this::cameraToDto)
                 .toList();
