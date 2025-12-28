@@ -32,13 +32,13 @@ public interface NvrCameraRepo extends JpaRepository<NvrCamera, Long> {
     /**
      * Находит все камеры пользователя (по ownerId устройства).
      */
-    @Query("select c from NvrCamera c where c.device.ownerId = :ownerId")
+    @Query("select distinct c from NvrCamera c where c.device.ownerId = :ownerId")
     List<NvrCamera> findByDeviceOwnerId(@Param("ownerId") Long ownerId);
     
     /**
      * Находит все камеры устройств, привязанных к указанному адресу.
      */
-    @Query("select c from NvrCamera c where c.device.addressEntity.id = :addressId")
+    @Query("select distinct c from NvrCamera c where c.device.addressEntity.id = :addressId")
     List<NvrCamera> findByDeviceAddressId(@Param("addressId") Long addressId);
     
     /**

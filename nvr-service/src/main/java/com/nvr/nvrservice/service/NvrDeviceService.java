@@ -29,7 +29,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -542,7 +544,14 @@ public class NvrDeviceService {
             }
         }
 
-        return cameras.stream()
+        // Убираем дубликаты по ID камеры (на случай, если в БД есть дубликаты или запрос вернул дубликаты)
+        // Используем LinkedHashMap для сохранения порядка первой встречи
+        Map<Long, NvrCamera> uniqueCameras = new LinkedHashMap<>();
+        for (NvrCamera camera : cameras) {
+            uniqueCameras.putIfAbsent(camera.getId(), camera);
+        }
+        
+        return uniqueCameras.values().stream()
                 .sorted((a, b) -> {
                     // Сортируем сначала по deviceId, потом по channelNo
                     int deviceCompare = Long.compare(

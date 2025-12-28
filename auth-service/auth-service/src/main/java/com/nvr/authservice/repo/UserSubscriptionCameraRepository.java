@@ -32,4 +32,17 @@ public interface UserSubscriptionCameraRepository extends JpaRepository<UserSubs
            "AND us.active = true " +
            "AND us.endsAt > :now")
     List<Long> findActiveCameraIdsByUserId(@Param("userId") Long userId, @Param("now") Instant now);
+
+    // Найти активные подписки на конкретную камеру для конкретного пользователя
+    @Query("SELECT usc FROM UserSubscriptionCamera usc " +
+           "JOIN usc.userSubscription us " +
+           "WHERE usc.cameraId = :cameraId " +
+           "AND us.user.id = :userId " +
+           "AND us.active = true " +
+           "AND us.endsAt > :now")
+    List<UserSubscriptionCamera> findActiveByCameraIdAndUserId(
+            @Param("cameraId") Long cameraId,
+            @Param("userId") Long userId,
+            @Param("now") Instant now
+    );
 }

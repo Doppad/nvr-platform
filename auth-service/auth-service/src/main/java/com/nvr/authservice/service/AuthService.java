@@ -2,6 +2,7 @@ package com.nvr.authservice.service;
 
 import com.nvr.authservice.domain.RefreshToken;
 import com.nvr.authservice.exception.InvalidOtpException;
+import com.nvr.authservice.exception.SmsSendException;
 import com.nvr.authservice.exception.UserNotRegisteredException;
 import com.nvr.authservice.repo.AppUserRepository;
 import com.nvr.authservice.domain.AppUser;
@@ -38,9 +39,18 @@ public class AuthService {
         // НЕ проверяем регистрацию при запросе OTP
         // Проверка будет при verifyOtp - там вернется USER_NOT_REGISTERED если пользователь не зарегистрирован
         // OTP создаётся без userId, только по target (телефону)
-        String code = otpService.createAndSaveOtp(null, normalizedPhone);
-        System.out.println("OTP для " + normalizedPhone + ": " + code); // код на этом MVP печатается в лог (в проде полагаю надо SMS/email)
-        return "OTP sent (check server log)";
+        try {
+            String code = otpService.createAndSaveOtp(null, normalizedPhone);
+            // Отправка SMS/Telegram происходит через NotificationService (OtpService.sendOtp)
+            // Если app.sms.enabled=true -> отправляется реальное SMS
+            // Если app.telegram.enabled=true -> отправляется в Telegram
+            // Иначе -> логируется (dev режим)
+            return "OTP sent";
+        } catch (SmsSendException e) {
+            // Если SMS не отправилось - пробрасываем исключение для обработки в контроллере
+            // Контроллер вернет 503 Service Unavailable
+            throw e;
+        }
     }
 
     @Transactional

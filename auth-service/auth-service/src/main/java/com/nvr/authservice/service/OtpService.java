@@ -2,6 +2,7 @@ package com.nvr.authservice.service;
 
 import com.nvr.authservice.domain.AppUser;
 import com.nvr.authservice.domain.OtpAttempt;
+import com.nvr.authservice.exception.SmsSendException;
 import com.nvr.authservice.repo.OtpAttemptRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,6 +26,16 @@ public class OtpService {
         String code = String.format("%06d", new Random().nextInt(1_000_000));
         String hash = BCrypt.hashpw(code, BCrypt.gensalt());    // хэширует BCrypt
 
+        // Сначала отправляем SMS/Telegram, потом сохраняем OTP
+        // Если отправка не удалась (SmsSendException) - OTP не создается
+        try {
+            notificationService.sendOtp(target, code);
+        } catch (SmsSendException e) {
+            // Если SMS не отправилось - не создаем OTP и пробрасываем исключение
+            throw e;
+        }
+
+        // SMS успешно отправлено - сохраняем OTP в БД
         OtpAttempt attempt = OtpAttempt.builder()
                 .userId(user != null ? user.getId() : null)
                 .target(target)
@@ -33,8 +44,6 @@ public class OtpService {
                 .build();
 
         otpRepo.save(attempt);
-
-        notificationService.sendOtp(target, code);      // для ТГ
 
         return code;
     }

@@ -2,6 +2,7 @@ package com.nvr.authservice.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
@@ -13,6 +14,7 @@ import java.util.Map;
 @Slf4j
 @Service
 @ConditionalOnProperty(prefix = "app.telegram", name = "enabled", havingValue = "true")
+@ConditionalOnExpression("!${app.sms.enabled:false}")
 @RequiredArgsConstructor
 public class TelegramNotificationService implements NotificationService {
 
@@ -25,6 +27,9 @@ public class TelegramNotificationService implements NotificationService {
     public void sendOtp(String target, String code) {
         // Собираю текст
         String text = "OTP для " + target + ": " + code;
+
+        // Логируем OTP код для отладки
+        log.info("Sending OTP to Telegram: target={}, code={}", target, code);
 
         // Telegram sendMessage
         String url = "https://api.telegram.org/bot" + botToken + "/sendMessage";
@@ -39,7 +44,9 @@ public class TelegramNotificationService implements NotificationService {
 
         try {
             ResponseEntity<String> resp = restTemplate.postForEntity(url, new HttpEntity<>(body, headers), String.class);
-            if (!resp.getStatusCode().is2xxSuccessful()) {
+            if (resp.getStatusCode().is2xxSuccessful()) {
+                log.info("OTP sent successfully to Telegram: code={}", code);
+            } else {
                 log.warn("Telegram sendMessage non-2xx: status={}, body={}", resp.getStatusCode(), resp.getBody());
             }
         } catch (Exception e) {

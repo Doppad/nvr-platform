@@ -127,7 +127,9 @@ public class BillingService {
         }
 
         // Проверка принадлежности камер пользователю через nvr-service
-        cameraValidationService.validateCameraOwnership(userId, cameraIds);
+        // Получаем addressId из пользователя для актуальной модели доступа
+        Long userAddressId = user.getAddressId();
+        cameraValidationService.validateCameraOwnership(userId, userAddressId, cameraIds);
 
         // Берем цену из БД - безопасно!
         Long amountMinor = plan.getPriceMinor();
@@ -192,31 +194,47 @@ public class BillingService {
 
     /**
      * Обрабатывает успешный платеж и создает подписку.
+     * Идемпотентный метод: повторные вызовы не создают дубликаты.
      *
      * @param paymentId идентификатор платежа в системе Тинькофф
      * @param orderId номер заказа
+     * @throws ResponseStatusException с HTTP статусами:
+     *         - 404 NOT_FOUND если attempt не найден
+     *         - 409 CONFLICT для неконсистентных данных (неверное количество камер, план не найден и т.д.)
      */
     @Transactional
     public void handleSuccessfulPayment(String paymentId, String orderId) {
         log.info("handleSuccessfulPayment called: PaymentId={}, OrderId={}", paymentId, orderId);
         
-        // Находим попытку платежа по orderId или paymentId
-        PaymentAttempt attempt = paymentAttemptRepo.findByProviderSessionId(paymentId)
+        // ИДЕМПОТЕНТНОСТЬ: находим attempt с блокировкой FOR UPDATE для предотвращения race conditions
+        PaymentAttempt attempt = paymentAttemptRepo.findByProviderSessionIdForUpdate(paymentId)
                 .orElseGet(() -> {
                     if (orderId != null) {
-                        return paymentAttemptRepo.findByOrderId(orderId)
-                                .orElseThrow(() -> new IllegalArgumentException("Payment attempt not found for PaymentId=" + paymentId + ", OrderId=" + orderId));
+                        return paymentAttemptRepo.findByOrderIdForUpdate(orderId)
+                                .orElseThrow(() -> {
+                                    log.error("Payment attempt not found: PaymentId={}, OrderId={}", paymentId, orderId);
+                                    return new ResponseStatusException(
+                                            HttpStatus.NOT_FOUND,
+                                            "Payment attempt not found for PaymentId=" + paymentId + ", OrderId=" + orderId
+                                    );
+                                });
                     }
-                    throw new IllegalArgumentException("Payment attempt not found for PaymentId=" + paymentId);
+                    log.error("Payment attempt not found: PaymentId={}", paymentId);
+                    throw new ResponseStatusException(
+                            HttpStatus.NOT_FOUND,
+                            "Payment attempt not found for PaymentId=" + paymentId
+                    );
                 });
 
         log.info("Found payment attempt in handleSuccessfulPayment: Id={}, Status={}, ProviderSessionId={}, PlanCode={}, UserId={}", 
                 attempt.getId(), attempt.getStatus(), attempt.getProviderSessionId(), 
                 attempt.getPlanCode(), attempt.getUser().getId());
 
+        // ИДЕМПОТЕНТНОСТЬ: если уже обработан - возвращаемся без побочных эффектов
         if (!"PENDING".equals(attempt.getStatus())) {
-            log.warn("Payment attempt {} already processed with status {}", attempt.getId(), attempt.getStatus());
-            return;
+            log.info("Payment attempt {} already processed with status {}. Returning OK (idempotent).", 
+                    attempt.getId(), attempt.getStatus());
+            return; // 200 OK - идемпотентность
         }
 
         // Проверяем статус в Тинькофф
@@ -232,14 +250,42 @@ public class BillingService {
             return;
         }
 
-        // Обновляем статус попытки платежа
-        attempt.setStatus("SUCCESS");
-        paymentAttemptRepo.save(attempt);
-        log.info("Updated payment attempt status to SUCCESS: AttemptId={}", attempt.getId());
+        // ИДЕМПОТЕНТНОСТЬ: атомарное обновление статуса PENDING -> SUCCESS
+        // Если статус уже не PENDING (изменился между проверкой и обновлением) - метод вернет 0
+        Long attemptId = attempt.getId(); // Сохраняем ID в final переменную для использования в lambda
+        int updated = paymentAttemptRepo.updateStatusFromPendingToSuccess(attemptId);
+        if (updated == 0) {
+            // Статус уже был изменен другим потоком - идемпотентность
+            log.info("Payment attempt {} status was already changed by another process. Returning OK (idempotent).", 
+                    attemptId);
+            return; // 200 OK - идемпотентность
+        }
+        
+        // Перезагружаем attempt для получения актуального статуса
+        attempt = paymentAttemptRepo.findById(attemptId)
+                .orElseThrow(() -> {
+                    log.error("Payment attempt {} not found after status update", attemptId);
+                    return new ResponseStatusException(
+                            HttpStatus.NOT_FOUND,
+                            "Payment attempt not found after status update"
+                    );
+                });
+        
+        log.info("Updated payment attempt status to SUCCESS: AttemptId={}", attemptId);
 
         // Создаем подписку
-        SubscriptionPlan plan = planRepo.findByCode(attempt.getPlanCode())
-                .orElseThrow(() -> new IllegalStateException("Plan not found: " + attempt.getPlanCode()));
+        // Сохраняем значения в final переменные для использования в lambda
+        final Long finalAttemptId = attempt.getId();
+        final String planCode = attempt.getPlanCode();
+        
+        SubscriptionPlan plan = planRepo.findByCode(planCode)
+                .orElseThrow(() -> {
+                    log.error("Plan not found for payment attempt {}: PlanCode={}", finalAttemptId, planCode);
+                    return new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            "Plan not found: " + planCode
+                    );
+                });
 
         Instant now = Instant.now();
         Instant endsAt = now.plus(30, ChronoUnit.DAYS); // подписка на 30 дней
@@ -267,18 +313,68 @@ public class BillingService {
 
         log.info("Found {} camera(s) for payment attempt: CameraIds={}", cameraIds.size(), cameraIds);
 
-        // Проверяем, что камеры не имеют других активных подписок
+        // СТРОГАЯ ВАЛИДАЦИЯ: проверяем размер списка камер в соответствии с планом
+        Integer expectedCameraCount = plan.getCameraQuota();
+        if (expectedCameraCount == null) {
+            log.error("Plan {} has no cameraQuota configured. Cannot validate camera count. PaymentAttemptId={}", 
+                    plan.getCode(), attempt.getId());
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Plan " + plan.getCode() + " has no cameraQuota configured"
+            );
+        }
+
+        if (cameraIds.isEmpty()) {
+            log.error("Payment attempt {} has no cameras saved. Cannot create subscription.", attempt.getId());
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Payment attempt has no cameras saved. Cannot create subscription."
+            );
+        }
+
+        if (cameraIds.size() != expectedCameraCount) {
+            log.error("Payment attempt {} has incorrect camera count. Expected: {}, Actual: {}, CameraIds: {}", 
+                    attempt.getId(), expectedCameraCount, cameraIds.size(), cameraIds);
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    String.format("Payment attempt has incorrect camera count. Plan %s requires exactly %d camera(s), but %d found in payment attempt", 
+                            plan.getCode(), expectedCameraCount, cameraIds.size())
+            );
+        }
+
+        // СТРОГАЯ ВАЛИДАЦИЯ: проверяем принадлежность камер пользователю (использует актуальную модель через addressId)
+        // Работает в webhook-контексте без SecurityContext/JWT
+        Long userAddressId = attempt.getUser().getAddressId();
+        try {
+            cameraValidationService.validateCameraOwnership(attempt.getUser().getId(), userAddressId, cameraIds);
+            log.info("Camera ownership validated for user {} (addressId={}): CameraIds={}", 
+                    attempt.getUser().getId(), userAddressId, cameraIds);
+        } catch (ResponseStatusException e) {
+            log.error("Camera ownership validation failed for user {} (addressId={}): CameraIds={}, Error: {}", 
+                    attempt.getUser().getId(), userAddressId, cameraIds, e.getMessage());
+            // Пробрасываем ResponseStatusException как есть (уже содержит правильный HTTP статус)
+            throw e;
+        }
+
+        // ИДЕМПОТЕНТНОСТЬ уже проверена выше: если статус не PENDING, метод возвращается раньше
+        // Дополнительная защита: проверяем, что подписка еще не была создана для этого платежа
+        // (на случай, если статус был изменен вручную или есть race condition)
+
+        // Проверяем, что у этого пользователя нет активных подписок на эти камеры
         for (Long cameraId : cameraIds) {
-            // Проверяем активные подписки на эту камеру
-            List<UserSubscriptionCamera> existingCameras = userSubscriptionCameraRepo.findActiveByCameraId(cameraId, now);
+            // Проверяем активные подписки на эту камеру ДЛЯ ЭТОГО ПОЛЬЗОВАТЕЛЯ
+            List<UserSubscriptionCamera> existingCameras = userSubscriptionCameraRepo
+                    .findActiveByCameraIdAndUserId(cameraId, attempt.getUser().getId(), now);
 
             if (!existingCameras.isEmpty()) {
                 String existingSubscriptionIds = existingCameras.stream()
                         .map(usc -> usc.getUserSubscription().getId().toString())
                         .collect(Collectors.joining(", "));
-                log.error("Camera {} already has active subscription(s): SubscriptionIds={}", cameraId, existingSubscriptionIds);
-                throw new IllegalStateException(
-                        String.format("Camera %d already has an active subscription. Subscription IDs: %s", 
+                log.error("User {} already has active subscription(s) for camera {}: SubscriptionIds={}", 
+                        attempt.getUser().getId(), cameraId, existingSubscriptionIds);
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        String.format("User already has an active subscription for camera %d. Subscription IDs: %s", 
                                 cameraId, existingSubscriptionIds)
                 );
             }

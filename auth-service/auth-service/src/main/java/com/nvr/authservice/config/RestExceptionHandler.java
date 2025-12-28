@@ -1,6 +1,7 @@
 package com.nvr.authservice.config;
 
 import com.nvr.authservice.exception.InvalidOtpException;
+import com.nvr.authservice.exception.SmsSendException;
 import com.nvr.authservice.exception.UserNotRegisteredException;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
@@ -43,6 +44,15 @@ public class RestExceptionHandler {
                 "timestamp", Instant.now().toString(),
                 "code", "USER_NOT_REGISTERED",
                 "message", ex.getMessage()
+        ));
+    }
+
+    @ExceptionHandler(SmsSendException.class)
+    public ResponseEntity<?> smsSendFailed(SmsSendException ex) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of(
+                "timestamp", Instant.now().toString(),
+                "code", "SMS_UNAVAILABLE",
+                "message", "SMS service is temporarily unavailable. Please try again later."
         ));
     }
 

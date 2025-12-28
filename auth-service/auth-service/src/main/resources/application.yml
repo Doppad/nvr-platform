@@ -25,6 +25,8 @@ app:
     refresh-ttl-days: 60
   otp:
     ttl-minutes: 5 # время жизни OTP
+  sms:
+    enabled: ${APP_SMS_ENABLED:false}
   telegram:
     enabled: ${APP_TELEGRAM_ENABLED:false}
     bot-token: ${APP_TELEGRAM_BOT_TOKEN:}
@@ -34,5 +36,3 @@ app:
     password: ${APP_TINKOFF_PASSWORD:evjMB_tTiMh8rm9P}
   billing:
     public-base-url: ${APP_BILLING_PUBLIC_BASE_URL:https://pay.okodoma.ru}
-  nvr-service:
-    base-url: ${APP_NVR_SERVICE_BASE_URL:http://localhost:8082}
