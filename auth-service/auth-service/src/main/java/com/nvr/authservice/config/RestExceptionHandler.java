@@ -1,6 +1,7 @@
 package com.nvr.authservice.config;
 
 import com.nvr.authservice.exception.InvalidOtpException;
+import com.nvr.authservice.exception.InvalidPhoneException;
 import com.nvr.authservice.exception.SmsSendException;
 import com.nvr.authservice.exception.UserNotRegisteredException;
 import org.springframework.http.*;
@@ -47,9 +48,18 @@ public class RestExceptionHandler {
         ));
     }
 
+    @ExceptionHandler(InvalidPhoneException.class)
+    public ResponseEntity<?> invalidPhone(InvalidPhoneException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
+                "timestamp", Instant.now().toString(),
+                "code", "INVALID_PHONE",
+                "message", "Invalid phone number format"
+        ));
+    }
+
     @ExceptionHandler(SmsSendException.class)
     public ResponseEntity<?> smsSendFailed(SmsSendException ex) {
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of(
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(Map.of(
                 "timestamp", Instant.now().toString(),
                 "code", "SMS_UNAVAILABLE",
                 "message", "SMS service is temporarily unavailable. Please try again later."

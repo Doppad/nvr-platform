@@ -25,8 +25,13 @@ app:
     refresh-ttl-days: 60
   otp:
     ttl-minutes: 5 # время жизни OTP
+    sms-template: '${APP_OTP_SMS_TEMPLATE:OKO: Код подтверждения %s}'
   sms:
     enabled: ${APP_SMS_ENABLED:false}
+exolve:
+  base-url: https://api.exolve.ru
+  api-key: ${EXOLVE_API_KEY:}
+  sender: 79587577632
   telegram:
     enabled: ${APP_TELEGRAM_ENABLED:false}
     bot-token: ${APP_TELEGRAM_BOT_TOKEN:}
