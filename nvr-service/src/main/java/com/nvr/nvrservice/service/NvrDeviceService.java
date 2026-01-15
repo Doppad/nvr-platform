@@ -128,7 +128,7 @@ public class NvrDeviceService {
     public DeviceDto create(Long ownerIdIgnored, CreateDeviceReq req) {
         // Берём контекст пользователя (userId, лимит и т.д.)
         var ctx = userCtxOrThrow();
-        
+
         // ПЕРЕХОД К ГЛОБАЛЬНЫМ ADDRESS: проверяем лимит камер по addressId (если есть)
         Long userAddressId = getUserAddressId(ctx);
         long used;
@@ -178,7 +178,8 @@ public class NvrDeviceService {
         // Проверка доступа: обычный пользователь может использовать только свой addressId
         // Используем уже полученный userAddressId из строки 130
         if (!isSuperAdmin(ctx)) {
-            if (userAddressId == null || !userAddressId.equals(finalAddressId)) {
+            boolean ownsAddress = addressRepo.existsByIdAndOwnerId(finalAddressId, ctx.userId());
+            if (!ownsAddress) {
                 throw new ResponseStatusException(
                         HttpStatus.FORBIDDEN,
                         "Address does not belong to user: " + finalAddressId

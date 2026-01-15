@@ -8,4 +8,5 @@ import java.util.List;
 public interface AddressRepo extends JpaRepository<Address, Long> {
 
     List<Address> findByOwnerId(Long ownerId);
+    boolean existsByIdAndOwnerId(Long id, Long ownerId);
 }
