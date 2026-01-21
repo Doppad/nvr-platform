@@ -31,7 +31,7 @@ app:
 exolve:
   base-url: https://api.exolve.ru
   api-key: ${EXOLVE_API_KEY:}
-  sender: 79587577632
+  sender: Okodoma
   telegram:
     enabled: ${APP_TELEGRAM_ENABLED:false}
     bot-token: ${APP_TELEGRAM_BOT_TOKEN:}
