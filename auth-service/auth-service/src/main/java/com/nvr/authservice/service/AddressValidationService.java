@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -22,7 +23,7 @@ public class AddressValidationService {
 
     private final RestTemplate restTemplate;
 
-    @Value("${app.nvr-service.base-url:http://localhost:8082}")
+    @Value("${nvr.base-url:http://localhost:8082}")
     private String nvrServiceBaseUrl;
 
     /**
@@ -64,9 +65,16 @@ public class AddressValidationService {
             }
         } catch (ResponseStatusException e) {
             throw e; // Пробрасываем наши исключения
+        } catch (ResourceAccessException e) {
+            // Ошибка подключения к nvr-service (таймаут, connection refused и т.д.)
+            log.error("Failed to connect to nvr-service for address validation {}: {}", addressId, e.getMessage());
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Не удалось проверить адрес. Попробуйте позже."
+            );
         } catch (Exception e) {
             log.error("Error validating address {}: {}", addressId, e.getMessage(), e);
-            // В случае ошибки подключения к nvr-service - блокируем регистрацию
+            // В случае любой другой ошибки - блокируем регистрацию
             // Это важно для безопасности: лучше не создать пользователя, чем создать с невалидным адресом
             throw new ResponseStatusException(
                     HttpStatus.INTERNAL_SERVER_ERROR,

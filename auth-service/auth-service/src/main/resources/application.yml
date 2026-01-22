@@ -47,3 +47,6 @@ exolve:
     password: ${APP_TINKOFF_PASSWORD:evjMB_tTiMh8rm9P}
   billing:
     public-base-url: ${APP_BILLING_PUBLIC_BASE_URL:https://pay.okodoma.ru}
+
+nvr:
+  base-url: ${NVR_BASE_URL:http://localhost:8082}
