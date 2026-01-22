@@ -85,9 +85,10 @@ public class SecurityConfig {
                 )
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
-                                "/actuator/**",        // системные эндпоинты
-                                "/swagger-ui/**",      // Swagger UI
-                                "/v3/api-docs/**"      // OpenAPI
+                                "/actuator/**",                    // системные эндпоинты
+                                "/swagger-ui/**",                 // Swagger UI
+                                "/v3/api-docs/**",                // OpenAPI
+                                "/nvr/addresses/*/exists"         // публичный эндпоинт для проверки существования адреса (используется при регистрации)
                         ).permitAll()
                         .anyRequest().authenticated()
                 )

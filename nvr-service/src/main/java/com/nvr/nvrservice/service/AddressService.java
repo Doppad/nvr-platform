@@ -124,4 +124,18 @@ public class AddressService {
 
         repository.delete(address);
     }
+
+    /**
+     * Проверяет существование адреса по ID.
+     * Публичный метод для использования в auth-service при регистрации.
+     * 
+     * @param addressId ID адреса для проверки
+     * @return true если адрес существует, false в противном случае
+     */
+    public boolean existsById(Long addressId) {
+        if (addressId == null) {
+            return false;
+        }
+        return repository.existsById(addressId);
+    }
 }

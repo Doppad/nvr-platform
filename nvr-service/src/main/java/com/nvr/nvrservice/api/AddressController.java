@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+import java.util.Map;
+import org.springframework.http.ResponseEntity;
 
 @RestController
 @RequestMapping("/nvr/addresses")
@@ -42,6 +44,24 @@ public class AddressController {
                 address.getApartment(),
                 address.getComment()
         ));
+    }
+
+    /**
+     * Публичный эндпоинт для проверки существования адреса.
+     * Используется при регистрации пользователя в auth-service.
+     * 
+     * @param addressId ID адреса для проверки
+     * @return 200 если адрес существует, 404 если не найден
+     */
+    @GetMapping("/{addressId}/exists")
+    public ResponseEntity<?> checkAddressExists(@PathVariable Long addressId) {
+        boolean exists = service.existsById(addressId);
+        if (exists) {
+            return ResponseEntity.ok(Map.of("exists", true, "addressId", addressId));
+        } else {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("exists", false, "addressId", addressId));
+        }
     }
 
     /**

@@ -26,6 +26,7 @@ public class AuthService {
     private final SubscriptionService subscriptionService;
     private final RefreshTokenService refreshTokenService;
     private final PhoneValidationService phoneValidationService;
+    private final AddressValidationService addressValidationService;
 
     @Value("${app.jwt.ttl-minutes}")
     private long accessTtlMinutes;
@@ -134,6 +135,12 @@ public class AuthService {
         phoneValidationService.validateRussianPhone(phone);
         String normalizedPhone = phoneValidationService.normalizePhone(phone);
         
+        // Проверяем существование адреса ПЕРЕД созданием пользователя
+        // Если адрес не найден - возвращаем ошибку, пользователь НЕ создаётся
+        if (addressId != null) {
+            addressValidationService.validateAddressExists(addressId);
+        }
+        
         Optional<AppUser> existing = userRepo.findByPhone(normalizedPhone);
         
         AppUser user;
@@ -142,6 +149,7 @@ public class AuthService {
             // Если пользователь существует, но не зарегистрирован (firstName/lastName == null)
             if (user.getFirstName() == null && user.getLastName() == null) {
                 // Обновляем данные пользователя
+                // Проверка адреса уже выполнена выше (строка 141), поэтому здесь просто присваиваем
                 String fullName = buildFullName(firstName, lastName, middleName);
                 user.setFullName(fullName);
                 user.setFirstName(firstName);
