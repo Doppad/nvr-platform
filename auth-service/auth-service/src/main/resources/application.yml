@@ -3,6 +3,12 @@ spring:
     url: jdbc:postgresql://89.23.102.97:5432/oko_api?sslmode=prefer
     username: oko_user
     password: Mx@:.s7T@#YUrg
+  hikari:
+    maximum-pool-size: 5
+    minimum-idle: 0
+    connection-timeout: 30000
+    idle-timeout: 600000
+    max-lifetime: 1800000
   jpa:
     hibernate:
       ddl-auto: validate   # схему создаёт Flyway
