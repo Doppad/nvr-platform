@@ -22,6 +22,7 @@ class AuthServiceTest {
     private SubscriptionService subscriptionService;
     private RefreshTokenService refreshTokenService;
     private PhoneValidationService phoneValidationService;
+    private AddressValidationService addressValidationService;
 
     private AuthService authService;
 
@@ -33,6 +34,7 @@ class AuthServiceTest {
         subscriptionService = mock(SubscriptionService.class);
         refreshTokenService = mock(RefreshTokenService.class);
         phoneValidationService = mock(PhoneValidationService.class);
+        addressValidationService = mock(AddressValidationService.class);
 
         authService = new AuthService(
                 userRepo,
@@ -40,7 +42,8 @@ class AuthServiceTest {
                 jwtService,
                 subscriptionService,
                 refreshTokenService,
-                phoneValidationService
+                phoneValidationService,
+                addressValidationService
         );
 
         ReflectionTestUtils.setField(authService, "accessTtlMinutes", 60L);
