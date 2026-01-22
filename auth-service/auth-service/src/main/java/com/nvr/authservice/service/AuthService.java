@@ -63,12 +63,12 @@ public class AuthService {
         // 2. Проверяем OTP (используем нормализованный номер)
         boolean ok = otpService.verify(normalizedPhone, code);
         if (!ok) {
-            throw new InvalidOtpException("Invalid or expired OTP");
+            throw new InvalidOtpException("Неверный или истёкший код подтверждения");
         }
 
         // 3. Ищем пользователя по телефону (используем нормализованный номер)
         AppUser user = userRepo.findByPhone(normalizedPhone)
-                .orElseThrow(() -> new UserNotRegisteredException("User with phone " + normalizedPhone + " is not registered. Please register first."));
+                .orElseThrow(() -> new UserNotRegisteredException("Пользователь с таким номером телефона не зарегистрирован. Пожалуйста, зарегистрируйтесь сначала."));
 
         // 4. Генерим access-token с реальными клеймами из подписки
         Map<String, Object> claims = subscriptionService.claimsForUser(user);
@@ -161,7 +161,7 @@ public class AuthService {
                 user = userRepo.save(user);
             } else {
                 // Пользователь уже зарегистрирован
-                throw new IllegalArgumentException("User with phone " + normalizedPhone + " already exists and is registered");
+                throw new IllegalArgumentException("Пользователь с таким номером телефона уже зарегистрирован");
             }
         } else {
             // Создаем нового пользователя
