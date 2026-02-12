@@ -54,6 +54,9 @@ public class AdminController {
         );
         var attrs = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
         attrs.getRequest().setAttribute("userContext", ctx);
+        // Устанавливаем явный флаг, что это запрос из админки
+        // Это гарантирует, что в сервисах будет показан полный доступ ко всем устройствам
+        attrs.getRequest().setAttribute("isAdminRequest", Boolean.TRUE);
 
         var auth = new UsernamePasswordAuthenticationToken(userId, null, java.util.List.of());
         SecurityContextHolder.getContext().setAuthentication(auth);

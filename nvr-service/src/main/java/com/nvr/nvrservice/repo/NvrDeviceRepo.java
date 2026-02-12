@@ -34,4 +34,7 @@ public interface NvrDeviceRepo extends JpaRepository<NvrDevice, Long> {
     // DEPRECATED: для обратной совместимости
     @Deprecated
     Page<NvrDevice> findByOwnerIdAndAddressEntity_Id(Long ownerId, Long addressId, Pageable pageable);
+    
+    // Для админки: получить все устройства, привязанные к адресам пользователя
+    Page<NvrDevice> findByAddressEntity_OwnerId(Long ownerId, Pageable pageable);
 }
