@@ -48,13 +48,19 @@ public class NvrDeviceService {
 
     private DeviceDto toDto(NvrDevice dev) {
 
-        // Достаём viewer
-        NvrDeviceUser viewer = deviceUsers.findByDeviceIdAndRole(dev.getId(), "user_default")
-                .orElseThrow(() -> new IllegalStateException(
-                        "Viewer user (role=user_default) not configured for device " + dev.getId()
-                ));
-
-        String decryptedPass = crypto.decrypt(viewer.getPasswordEnc());
+        // Достаём viewer (может отсутствовать для старых устройств)
+        String viewerUsername = null;
+        String decryptedPass = null;
+        Optional<NvrDeviceUser> viewerOpt = deviceUsers.findByDeviceIdAndRole(dev.getId(), "user_default");
+        if (viewerOpt.isPresent()) {
+            NvrDeviceUser viewer = viewerOpt.get();
+            viewerUsername = viewer.getUsername();
+            decryptedPass = crypto.decrypt(viewer.getPasswordEnc());
+        } else {
+            // Для устройств без viewer-пользователя логируем предупреждение, но не падаем
+            log.warn("Viewer user (role=user_default) not configured for device {} (id={}). " +
+                    "Device will be shown without viewer credentials.", dev.getName(), dev.getId());
+        }
 
         int camerasCount = dev.getCamerasCount() != null ? dev.getCamerasCount() : 0;
 
@@ -89,8 +95,8 @@ public class NvrDeviceService {
 
                 camerasCount,
                 dev.getMaxChannels(), // Максимальное количество каналов
-                viewer.getUsername(),
-                decryptedPass,
+                viewerUsername,      // может быть null, если viewer не настроен
+                decryptedPass,       // может быть null, если viewer не настроен
 
                 address,
                 status
@@ -328,8 +334,34 @@ public class NvrDeviceService {
         var ctx = userCtxOrThrow();
         Page<NvrDevice> page;
 
-        if (isSuperAdmin(ctx)) {
-            page = repo.findAll(pageable);
+        // Проверяем, является ли запрос админским (из /admin/api)
+        // В админке супер-админ должен видеть все устройства, независимо от роли в UserContext
+        boolean isAdminRequest = false;
+        var attrs = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+        if (attrs != null) {
+            // 1. Проверяем явный флаг из request attribute (устанавливается в AdminController)
+            Object adminFlag = attrs.getRequest().getAttribute("isAdminRequest");
+            if (adminFlag instanceof Boolean && (Boolean) adminFlag) {
+                isAdminRequest = true;
+            } else {
+                // 2. Fallback: проверяем по пути ИЛИ по заголовку X-Admin-User
+                String requestPath = attrs.getRequest().getRequestURI();
+                String adminUserHeader = attrs.getRequest().getHeader("X-Admin-User");
+                if ((requestPath != null && requestPath.startsWith("/admin/api")) || 
+                    adminUserHeader != null) {
+                    isAdminRequest = true;
+                }
+            }
+        }
+
+        if (isSuperAdmin(ctx) || isAdminRequest) {
+            // SUPER_ADMIN или запрос из админки - показываем устройства, привязанные к адресам пользователя
+            log.info("Admin request detected: isSuperAdmin={}, isAdminRequest={}, userId={}, showing devices for user's addresses", 
+                    isSuperAdmin(ctx), isAdminRequest, ctx.userId());
+            // Получаем устройства, привязанные к адресам этого пользователя (addressEntity.ownerId = userId)
+            page = repo.findByAddressEntity_OwnerId(ctx.userId(), pageable);
+            log.info("Found {} devices for admin user {} (devices attached to user's addresses, page={}, size={})", 
+                    page.getTotalElements(), ctx.userId(), pageable.getPageNumber(), pageable.getPageSize());
         } else {
             // ПЕРЕХОД К ГЛОБАЛЬНЫМ ADDRESS: получаем устройства через addressId пользователя из UserContext
             Long userAddressId = getUserAddressId(ctx);
