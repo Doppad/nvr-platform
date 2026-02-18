@@ -1,5 +1,6 @@
 package com.nvr.authservice.config;
 
+import com.nvr.authservice.exception.InvalidEmailException;
 import com.nvr.authservice.exception.InvalidOtpException;
 import com.nvr.authservice.exception.InvalidPhoneException;
 import com.nvr.authservice.exception.SmsSendException;
@@ -49,6 +50,15 @@ public class RestExceptionHandler {
         ));
     }
 
+    @ExceptionHandler(InvalidEmailException.class)
+    public ResponseEntity<?> invalidEmail(InvalidEmailException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
+                "timestamp", Instant.now().toString(),
+                "code", "INVALID_EMAIL",
+                "message", ex.getMessage()
+        ));
+    }
+
     @ExceptionHandler(InvalidPhoneException.class)
     public ResponseEntity<?> invalidPhone(InvalidPhoneException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
@@ -59,11 +69,11 @@ public class RestExceptionHandler {
     }
 
     @ExceptionHandler(SmsSendException.class)
-    public ResponseEntity<?> smsSendFailed(SmsSendException ex) {
+    public ResponseEntity<?> notificationSendFailed(SmsSendException ex) {
         return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(Map.of(
                 "timestamp", Instant.now().toString(),
-                "code", "SMS_UNAVAILABLE",
-                "message", "Служба SMS временно недоступна. Попробуйте позже."
+                "code", "EMAIL_UNAVAILABLE",
+                "message", "Служба отправки временно недоступна. Попробуйте позже."
         ));
     }
 

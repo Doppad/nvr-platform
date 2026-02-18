@@ -5,6 +5,7 @@ import com.nvr.authservice.exception.InvalidOtpException;
 import com.nvr.authservice.exception.SmsSendException;
 import com.nvr.authservice.exception.UserNotRegisteredException;
 import com.nvr.authservice.repo.AppUserRepository;
+import com.nvr.authservice.repo.OtpAttemptRepository;
 import com.nvr.authservice.domain.AppUser;
 import com.nvr.authservice.web.AuthController;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.nvr.authservice.web.AuthController.TokenPairResp;
 
+import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -20,55 +22,50 @@ import java.util.concurrent.TimeUnit;
 @Service
 @RequiredArgsConstructor
 public class AuthService {
+    private static final int OTP_RATE_LIMIT_COUNT = 5;
+    private static final int OTP_RATE_LIMIT_MINUTES = 10;
+
     private final AppUserRepository userRepo;
     private final OtpService otpService;
     private final JwtService jwtService;
     private final SubscriptionService subscriptionService;
     private final RefreshTokenService refreshTokenService;
-    private final PhoneValidationService phoneValidationService;
+    private final EmailValidationService emailValidationService;
     private final AddressValidationService addressValidationService;
+    private final OtpAttemptRepository otpAttemptRepository;
 
     @Value("${app.jwt.ttl-minutes}")
     private long accessTtlMinutes;
 
     @Transactional
-    public String requestOtp(String emailOrPhone) {
-        // Валидируем номер телефона (формат, длина, только РФ)
-        phoneValidationService.validateRussianPhone(emailOrPhone);
-        String normalizedPhone = phoneValidationService.normalizePhone(emailOrPhone);
-        
-        // НЕ проверяем регистрацию при запросе OTP
-        // Проверка будет при verifyOtp - там вернется USER_NOT_REGISTERED если пользователь не зарегистрирован
-        // OTP создаётся без userId, только по target (телефону)
+    public String requestOtp(String email) {
+        String normalizedEmail = emailValidationService.validateAndNormalize(email);
+
+        long count = otpAttemptRepository.countByTargetAndCreatedAtAfter(
+                normalizedEmail, OffsetDateTime.now().minusMinutes(OTP_RATE_LIMIT_MINUTES));
+        if (count >= OTP_RATE_LIMIT_COUNT) {
+            throw new IllegalStateException("Превышен лимит запросов. Попробуйте через " + OTP_RATE_LIMIT_MINUTES + " минут.");
+        }
+
         try {
-            String code = otpService.createAndSaveOtp(null, normalizedPhone);
-            // Отправка SMS/Telegram происходит через NotificationService (OtpService.sendOtp)
-            // Если app.sms.enabled=true -> отправляется реальное SMS
-            // Если app.telegram.enabled=true -> отправляется в Telegram
-            // Иначе -> логируется (dev режим)
+            otpService.createAndSaveOtp(null, normalizedEmail);
             return "OTP sent";
         } catch (SmsSendException e) {
-            // Если SMS не отправилось - пробрасываем исключение для обработки в контроллере
-            // Контроллер вернет 503 Service Unavailable
             throw e;
         }
     }
 
     @Transactional
-    public TokenPairResp verifyOtp(String emailOrPhone, String code, String userAgent, String ip) {
-        // 1. Валидируем и нормализуем номер телефона
-        phoneValidationService.validateRussianPhone(emailOrPhone);
-        String normalizedPhone = phoneValidationService.normalizePhone(emailOrPhone);
-        
-        // 2. Проверяем OTP (используем нормализованный номер)
-        boolean ok = otpService.verify(normalizedPhone, code);
+    public TokenPairResp verifyOtp(String email, String code, String userAgent, String ip) {
+        String normalizedEmail = emailValidationService.validateAndNormalize(email);
+
+        boolean ok = otpService.verify(normalizedEmail, code);
         if (!ok) {
             throw new InvalidOtpException("Неверный или истёкший код подтверждения");
         }
 
-        // 3. Ищем пользователя по телефону (используем нормализованный номер)
-        AppUser user = userRepo.findByPhone(normalizedPhone)
-                .orElseThrow(() -> new UserNotRegisteredException("Пользователь с таким номером телефона не зарегистрирован. Пожалуйста, зарегистрируйтесь сначала."));
+        AppUser user = userRepo.findByEmail(normalizedEmail)
+                .orElseThrow(() -> new UserNotRegisteredException("Пользователь с таким email не зарегистрирован. Пожалуйста, зарегистрируйтесь сначала."));
 
         // 4. Генерим access-token с реальными клеймами из подписки
         Map<String, Object> claims = subscriptionService.claimsForUser(user);
@@ -116,76 +113,50 @@ public class AuthService {
 
     /**
      * Регистрация нового пользователя.
-     * 
-     * ПЕРЕХОД К ГЛОБАЛЬНЫМ ADDRESS:
-     * - Address теперь глобальные (не привязаны к ownerId)
-     * - Если addressId не передан - можно назначить позже через админку
-     * - При регистрации рекомендуется передавать addressId явно
      *
-     * @param phone телефон (обязательный)
+     * @param email email (обязательный)
      * @param firstName имя
      * @param lastName фамилия
      * @param middleName отчество
-     * @param addressId ID адреса (опциональный, можно привязать позже через админку)
+     * @param addressId ID адреса (опциональный)
      * @return данные зарегистрированного пользователя
      */
     @Transactional
-    public RegisterResponse register(String phone, String firstName, String lastName, String middleName, Long addressId) {
-        // Валидируем и нормализуем номер телефона
-        phoneValidationService.validateRussianPhone(phone);
-        String normalizedPhone = phoneValidationService.normalizePhone(phone);
-        
-        // Проверяем существование адреса ПЕРЕД созданием пользователя
-        // Если адрес не найден - возвращаем ошибку, пользователь НЕ создаётся
+    public RegisterResponse register(String email, String firstName, String lastName, String middleName, Long addressId) {
+        String normalizedEmail = emailValidationService.validateAndNormalize(email);
+
         if (addressId != null) {
             addressValidationService.validateAddressExists(addressId);
         }
-        
-        Optional<AppUser> existing = userRepo.findByPhone(normalizedPhone);
-        
+
+        Optional<AppUser> existing = userRepo.findByEmail(normalizedEmail);
         AppUser user;
         if (existing.isPresent()) {
             user = existing.get();
-            // Если пользователь существует, но не зарегистрирован (firstName/lastName == null)
-            if (user.getFirstName() == null && user.getLastName() == null) {
-                // Обновляем данные пользователя
-                // Проверка адреса уже выполнена выше (строка 141), поэтому здесь просто присваиваем
-                String fullName = buildFullName(firstName, lastName, middleName);
-                user.setFullName(fullName);
-                user.setFirstName(firstName);
-                user.setLastName(lastName);
-                user.setMiddleName(middleName);
-                if (addressId != null) {
-                    user.setAddressId(addressId);
-                }
-                user = userRepo.save(user);
-            } else {
-                // Пользователь уже зарегистрирован
-                throw new IllegalArgumentException("Пользователь с таким номером телефона уже зарегистрирован");
+            if (user.getFirstName() != null || user.getLastName() != null) {
+                throw new IllegalArgumentException("Пользователь с таким email уже зарегистрирован");
             }
+            String fullName = buildFullName(firstName, lastName, middleName);
+            user.setFullName(fullName);
+            user.setFirstName(firstName);
+            user.setLastName(lastName);
+            user.setMiddleName(middleName);
+            if (addressId != null) user.setAddressId(addressId);
+            user = userRepo.save(user);
         } else {
-            // Создаем нового пользователя
             String fullName = buildFullName(firstName, lastName, middleName);
             user = AppUser.builder()
-                    .phone(normalizedPhone)
-                    .email(null) // email не используется
-                    .fullName(fullName) // legacy поле
-                    .firstName(firstName)
-                    .lastName(lastName)
-                    .middleName(middleName)
-                    .addressId(addressId) // сохраняем addressId при регистрации
-                    .build();
+                .email(normalizedEmail)
+                .phone(null)
+                .fullName(fullName)
+                .firstName(firstName)
+                .lastName(lastName)
+                .middleName(middleName)
+                .addressId(addressId)
+                .build();
             user = userRepo.save(user);
         }
-
-        return new RegisterResponse(
-                user.getId(),
-                user.getPhone(),
-                user.getFirstName(),
-                user.getLastName(),
-                user.getMiddleName(),
-                user.getAddressId()
-        );
+        return new RegisterResponse(user.getId(), user.getEmail(), user.getFirstName(), user.getLastName(), user.getMiddleName(), user.getAddressId());
     }
 
     /**
@@ -210,24 +181,6 @@ public class AuthService {
     }
 
     /**
-     * @deprecated Больше не используется для логина. Оставлен только для внутренних целей, если понадобится.
-     * Для логина используйте явную проверку существования пользователя.
-     */
-    @Deprecated
-    private AppUser findOrCreate(String emailOrPhone) {
-        // Поддержка только телефона (email убран)
-        // Если передан email - все равно считаем это телефоном
-        String phone = emailOrPhone;
-        return userRepo.findByPhone(phone)
-                .orElseGet(() -> userRepo.save(
-                        AppUser.builder()
-                                .phone(phone)
-                                .email(null) // email не используется
-                                .build()
-                ));
-    }
-
-    /**
      * Обновляет addressId для пользователя.
      *
      * @param userId ID пользователя
@@ -246,10 +199,10 @@ public class AuthService {
      */
     public record RegisterResponse(
             Long userId,
-            String phone,
+            String email,
             String firstName,
             String lastName,
             String middleName,
-            Long addressId  // возвращаем сохраненный addressId
+            Long addressId
     ) {}
 }
