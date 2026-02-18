@@ -6,6 +6,8 @@ import java.time.OffsetDateTime;
 import java.util.Optional;
 
 public interface OtpAttemptRepository extends JpaRepository<OtpAttempt, Long> {
-    Optional<OtpAttempt> findTopByTargetAndIsUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc( // это буквально запрос как есть "Найти самую новую запись по target, где не использовано и не истекло"
+    Optional<OtpAttempt> findTopByTargetAndIsUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(
             String target, OffsetDateTime now);
+
+    long countByTargetAndCreatedAtAfter(String target, OffsetDateTime after);
 }

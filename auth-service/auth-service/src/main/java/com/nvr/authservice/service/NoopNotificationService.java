@@ -4,25 +4,27 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Service;
 
+/**
+ * Noop-реализация NotificationService (только логирование).
+ * Активна когда app.email.enabled=false AND app.sms.enabled=false AND app.telegram.enabled=false.
+ */
 @Slf4j
 @Service
-@ConditionalOnExpression("!${app.sms.enabled:false} && !${app.telegram.enabled:false}")
+@ConditionalOnExpression("!${app.email.enabled:true} && !${app.sms.enabled:false} && !${app.telegram.enabled:false}")
 public class NoopNotificationService implements NotificationService {
-    @Override 
+    @Override
     public void sendOtp(String target, String code) {
-        // В dev режиме логируем только факт отправки, но НЕ сам OTP код
-        log.info("OTP (noop) sent to {}", maskPhone(target));
+        log.info("OTP (noop) sent to {}", maskTarget(target));
     }
 
-    /**
-     * Маскирует номер телефона для безопасного логирования.
-     */
-    private String maskPhone(String phone) {
-        if (phone == null || phone.length() < 7) {
-            return "***";
+    private String maskTarget(String target) {
+        if (target == null || target.isBlank()) return "***";
+        if (target.contains("@")) {
+            int at = target.indexOf('@');
+            String local = target.substring(0, at);
+            return (local.length() <= 2 ? "***" : local.substring(0, 2) + "***") + target.substring(at);
         }
-        int visibleStart = Math.min(4, phone.length() - 7);
-        int visibleEnd = Math.max(phone.length() - 4, visibleStart + 3);
-        return phone.substring(0, visibleStart) + "***" + phone.substring(visibleEnd);
+        if (target.length() < 7) return "***";
+        return target.substring(0, 2) + "***" + target.substring(target.length() - 2);
     }
 }

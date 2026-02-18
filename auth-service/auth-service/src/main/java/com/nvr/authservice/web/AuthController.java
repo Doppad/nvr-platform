@@ -20,7 +20,7 @@ public class AuthController {       // выдача токена
 
     @PostMapping("/otp/request") // Запрос кода, отдаёт {message}
     public ResponseEntity<?> requestOtp(@RequestBody OtpRequest req) {
-        String msg = authService.requestOtp(req.emailOrPhone);
+        String msg = authService.requestOtp(req.email);
         return ResponseEntity.ok(new Msg(msg));
     }
 
@@ -32,7 +32,7 @@ public class AuthController {       // выдача токена
         String ip = request.getRemoteAddr();
 
         TokenPairResp tokens = authService.verifyOtp(
-                req.emailOrPhone,
+                req.email,
                 req.code,
                 userAgent,
                 ip
@@ -57,7 +57,7 @@ public class AuthController {       // выдача токена
     @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.CREATED)
     public ResponseEntity<?> register(@jakarta.validation.Valid @RequestBody RegisterRequest req) {
         var response = authService.register(
-                req.phone,
+                req.email,
                 req.firstName,
                 req.lastName,
                 req.middleName,
@@ -88,13 +88,13 @@ public class AuthController {       // выдача токена
     }
 
     // ---- DTO ----
-    @Data public static class OtpRequest { public String emailOrPhone; }
-    @Data public static class OtpVerify { public String emailOrPhone; public String code; }
+    @Data public static class OtpRequest { public String email; }
+    @Data public static class OtpVerify { public String email; public String code; }
     
     @Data
     public static class RegisterRequest {
         @NotBlank
-        private String phone;
+        private String email;
         private String firstName;
         private String lastName;
         private String middleName;
