@@ -69,8 +69,8 @@ public class AddressValidationService {
             // Ошибка подключения к nvr-service (таймаут, connection refused и т.д.)
             log.error("Failed to connect to nvr-service for address validation {}: {}", addressId, e.getMessage());
             throw new ResponseStatusException(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    "Не удалось проверить адрес. Попробуйте позже."
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Сервис адресов недоступен (nvr-service не запущен или недоступен). Запустите nvr-service или зарегистрируйтесь без addressId."
             );
         } catch (Exception e) {
             log.error("Error validating address {}: {}", addressId, e.getMessage(), e);
