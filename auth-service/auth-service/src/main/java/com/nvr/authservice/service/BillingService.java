@@ -583,10 +583,10 @@ public class BillingService {
 
     /**
      * Фоновая задача для обработки PENDING платежей.
-     * Запускается каждые 5 минут и проверяет статус платежей в Тинькофф.
+     * Запускается каждую минуту и проверяет статус платежей в Тинькофф.
      * Защита от дублей: handleSuccessfulPayment() проверяет статус PENDING перед обработкой.
      */
-    @Scheduled(fixedDelay = 300000) // каждые 5 минут (300000 мс)
+    @Scheduled(fixedDelay = 60000) // каждую минуту (60000 мс) - уменьшено с 5 минут для быстрой обработки платежей
     @Transactional
     public void processPendingPayments() {
         log.debug("Starting scheduled task to process pending payments");

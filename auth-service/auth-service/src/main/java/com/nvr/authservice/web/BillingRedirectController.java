@@ -30,17 +30,39 @@ public class BillingRedirectController {
         
         // Пытаемся автоматически обработать платеж, если webhook не пришел
         // Это безопасно - метод проверяет статус и не создаст дубликат подписки
-        try {
-            boolean processed = billingService.tryProcessPayment(orderId, paymentId);
-            if (processed) {
-                log.info("Payment processed from redirect page: PaymentId={}, OrderId={}", paymentId, orderId);
-            } else {
-                log.warn("Payment could not be processed from redirect page: PaymentId={}, OrderId={}", paymentId, orderId);
+        // Добавляем retry с небольшой задержкой, так как Tinkoff может еще обрабатывать платеж
+        boolean processed = false;
+        for (int attempt = 0; attempt < 3 && !processed; attempt++) {
+            try {
+                if (attempt > 0) {
+                    // Ждем 2 секунды перед повторной попыткой
+                    Thread.sleep(2000);
+                }
+                processed = billingService.tryProcessPayment(orderId, paymentId);
+                if (processed) {
+                    log.info("Payment processed from redirect page (attempt {}): PaymentId={}, OrderId={}", 
+                            attempt + 1, paymentId, orderId);
+                    break;
+                } else if (attempt < 2) {
+                    log.debug("Payment not yet processed, retrying (attempt {}/3): PaymentId={}, OrderId={}", 
+                            attempt + 1, paymentId, orderId);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("Payment processing interrupted: PaymentId={}, OrderId={}", paymentId, orderId);
+                break;
+            } catch (Exception e) {
+                log.error("Error processing payment from redirect page (attempt {}): PaymentId={}, OrderId={}, Error={}", 
+                        attempt + 1, paymentId, orderId, e.getMessage(), e);
+                // Продолжаем попытки, если это не последняя
+                if (attempt == 2) {
+                    log.warn("Payment could not be processed after 3 attempts: PaymentId={}, OrderId={}", paymentId, orderId);
+                }
             }
-        } catch (Exception e) {
-            log.error("Error processing payment from redirect page: PaymentId={}, OrderId={}, Error={}", 
-                    paymentId, orderId, e.getMessage(), e);
-            // Продолжаем показ страницы даже если обработка не удалась
+        }
+        
+        if (!processed) {
+            log.info("Payment will be processed by scheduled task or webhook: PaymentId={}, OrderId={}", paymentId, orderId);
         }
 
         // Tinkoff может передавать paymentId напрямую, или мы используем orderId из URL
