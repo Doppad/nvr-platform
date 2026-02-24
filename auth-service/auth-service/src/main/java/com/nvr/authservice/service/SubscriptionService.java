@@ -236,4 +236,51 @@ public class SubscriptionService {
         log.info("Created {} camera subscription(s) for user {}: Plan={}, SubscriptionId={}, CameraIds={}",
                 createdCount, userId, plan.getCode(), subscription.getId(), cameraIds);
     }
+
+    /**
+     * Отменяет активную подписку пользователя, связанную с указанным планом.
+     * Деактивирует подписку и устанавливает endsAt = now().
+     *
+     * @param userId ID пользователя
+     * @param planCode код плана (CAM_1 или CAM_3)
+     * @throws ResponseStatusException если активная подписка не найдена
+     */
+    @Transactional
+    public void cancelSubscription(Long userId, String planCode) {
+        log.info("cancelSubscription called: UserId={}, PlanCode={}", userId, planCode);
+
+        AppUser user = appUserRepo.findById(userId)
+                .orElseThrow(() -> {
+                    log.error("User not found: {}", userId);
+                    return new ResponseStatusException(
+                            HttpStatus.NOT_FOUND,
+                            "User not found: " + userId
+                    );
+                });
+
+        Instant now = Instant.now();
+
+        // Находим активную подписку пользователя с указанным планом
+        List<UserSubscription> activeSubscriptions = userSubscriptionRepo
+                .findByUserAndActiveIsTrueAndEndsAtAfterWithPlan(user, now);
+
+        UserSubscription subscriptionToCancel = activeSubscriptions.stream()
+                .filter(sub -> planCode.equals(sub.getPlan().getCode()))
+                .findFirst()
+                .orElseThrow(() -> {
+                    log.error("Active subscription not found for user {} with plan {}", userId, planCode);
+                    return new ResponseStatusException(
+                            HttpStatus.NOT_FOUND,
+                            "Active subscription not found for user " + userId + " with plan " + planCode
+                    );
+                });
+
+        // Деактивируем подписку
+        subscriptionToCancel.setActive(false);
+        subscriptionToCancel.setEndsAt(now);
+        userSubscriptionRepo.save(subscriptionToCancel);
+
+        log.info("Subscription cancelled: SubscriptionId={}, UserId={}, PlanCode={}, EndedAt={}",
+                subscriptionToCancel.getId(), userId, planCode, now);
+    }
 }

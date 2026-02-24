@@ -282,6 +282,88 @@ public class BillingService {
     }
 
     /**
+     * Обрабатывает возврат средств по платежу.
+     * Проверяет статус платежа, вызывает Tinkoff API для возврата,
+     * обновляет статус PaymentAttempt и отменяет подписку.
+     *
+     * @param paymentId идентификатор платежа в системе Тинькофф
+     * @param userId ID пользователя (для проверки владельца платежа)
+     * @throws ResponseStatusException если платеж не найден, не подтвержден, уже возвращен или не принадлежит пользователю
+     */
+    public void handleRefund(String paymentId, Long userId) {
+        log.info("handleRefund called: PaymentId={}, UserId={}", paymentId, userId);
+
+        // Находим платеж
+        PaymentAttempt attempt = paymentAttemptRepo.findByProviderSessionId(paymentId)
+                .orElseThrow(() -> {
+                    log.error("Payment attempt not found: PaymentId={}", paymentId);
+                    return new ResponseStatusException(
+                            HttpStatus.NOT_FOUND,
+                            "Payment attempt not found: " + paymentId
+                    );
+                });
+
+        log.info("Found payment attempt: Id={}, Status={}, ProviderSessionId={}, PlanCode={}, UserId={}",
+                attempt.getId(), attempt.getStatus(), attempt.getProviderSessionId(),
+                attempt.getPlanCode(), attempt.getUser().getId());
+
+        // Проверяем, что платеж принадлежит пользователю
+        if (!attempt.getUser().getId().equals(userId)) {
+            log.error("Payment {} does not belong to user {}. Payment owner: {}",
+                    paymentId, userId, attempt.getUser().getId());
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Payment does not belong to user"
+            );
+        }
+
+        // Проверяем, что платеж подтвержден
+        if (!"SUCCESS".equals(attempt.getStatus())) {
+            log.warn("Payment {} is not confirmed (status: {}). Cannot refund.", paymentId, attempt.getStatus());
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Payment is not confirmed. Current status: " + attempt.getStatus()
+            );
+        }
+
+        // Проверяем, что платеж еще не был возвращен
+        if ("REFUNDED".equals(attempt.getStatus())) {
+            log.info("Payment {} already refunded. Returning OK (idempotent).", paymentId);
+            return; // Идемпотентность
+        }
+
+        // Проверяем статус в Тинькофф перед возвратом
+        log.info("Checking payment status before refund with PaymentId={}", paymentId);
+        TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentId);
+        log.info("Payment status from Tinkoff: Status={}, Success={}", state.status(), state.success());
+
+        if (!"CONFIRMED".equals(state.status()) && !"AUTHORIZED".equals(state.status())) {
+            log.warn("Payment {} status is not CONFIRMED or AUTHORIZED: {}. Cannot refund.", paymentId, state.status());
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Payment status is not CONFIRMED or AUTHORIZED: " + state.status()
+            );
+        }
+
+        // Выполняем возврат через Tinkoff API (полный возврат, amount = null)
+        log.info("Calling Tinkoff refund API for PaymentId={}", paymentId);
+        TinkoffApiClient.TinkoffRefundResponse refundResponse = tinkoffApiClient.refundPayment(paymentId, null);
+        log.info("Tinkoff refund response: Success={}, Status={}, Amount={}",
+                refundResponse.success(), refundResponse.status(), refundResponse.amount());
+
+        // Обновляем статус платежа на REFUNDED
+        attempt.setStatus("REFUNDED");
+        paymentAttemptRepo.save(attempt);
+        log.info("Updated payment attempt status to REFUNDED: AttemptId={}", attempt.getId());
+
+        // Отменяем подписку через SubscriptionService (в отдельной транзакции)
+        subscriptionService.cancelSubscription(attempt.getUser().getId(), attempt.getPlanCode());
+
+        log.info("Successfully processed refund: PaymentId={}, UserId={}, PlanCode={}",
+                paymentId, attempt.getUser().getId(), attempt.getPlanCode());
+    }
+
+    /**
      * Обрабатывает неуспешный платеж.
      *
      * @param paymentId идентификатор платежа

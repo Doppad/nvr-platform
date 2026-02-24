@@ -187,6 +187,61 @@ public class TinkoffApiClient {
     }
 
     /**
+     * Выполняет возврат средств по платежу.
+     * Использует API Tinkoff /v2/Refund.
+     *
+     * @param paymentId идентификатор платежа в системе Тинькофф
+     * @param amount сумма возврата в минимальных единицах (копейки). Если null - полный возврат
+     * @return результат возврата средств
+     */
+    public TinkoffRefundResponse refundPayment(String paymentId, Long amount) {
+        Map<String, Object> requestData = new HashMap<>();
+        requestData.put("TerminalKey", terminalKey);
+        requestData.put("PaymentId", paymentId);
+        if (amount != null && amount > 0) {
+            requestData.put("Amount", amount);
+        }
+
+        // Формируем подпись (Token)
+        String token = generateToken(requestData);
+        requestData.put("Token", token);
+
+        try {
+            String url = API_BASE_URL + "/Refund";
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+
+            HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestData, headers);
+            ResponseEntity<String> response = restTemplate.postForEntity(url, request, String.class);
+
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                log.error("Tinkoff Refund failed: status={}, body={}", response.getStatusCode(), response.getBody());
+                throw new RuntimeException("Failed to refund payment: " + response.getStatusCode());
+            }
+
+            JsonNode jsonResponse = objectMapper.readTree(response.getBody());
+            boolean success = jsonResponse.get("Success").asBoolean();
+            String errorCode = jsonResponse.has("ErrorCode") ? jsonResponse.get("ErrorCode").asText() : null;
+            String message = jsonResponse.has("Message") ? jsonResponse.get("Message").asText() : null;
+            String status = jsonResponse.has("Status") ? jsonResponse.get("Status").asText() : null;
+            Long refundAmount = jsonResponse.has("Amount") ? jsonResponse.get("Amount").asLong() : null;
+
+            if (!success) {
+                log.error("Tinkoff Refund error: ErrorCode={}, Message={}", errorCode, message);
+                throw new RuntimeException("Tinkoff refund failed: " + message);
+            }
+
+            log.info("Tinkoff refund successful: PaymentId={}, Amount={}, Status={}", paymentId, refundAmount, status);
+
+            return new TinkoffRefundResponse(success, paymentId, status, refundAmount, message);
+
+        } catch (Exception e) {
+            log.error("Error calling Tinkoff Refund API: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to refund Tinkoff payment: " + e.getMessage(), e);
+        }
+    }
+
+    /**
      * Проверяет подпись (Token) в webhook от Тинькофф.
      * Алгоритм такой же, как при генерации: все поля кроме Token + Password, сортировка, конкатенация, SHA256.
      *
@@ -242,6 +297,17 @@ public class TinkoffApiClient {
             String paymentId,
             String status,
             String orderId,
+            Long amount,
+            String message
+    ) {}
+
+    /**
+     * Ответ от метода Refund.
+     */
+    public record TinkoffRefundResponse(
+            boolean success,
+            String paymentId,
+            String status,
             Long amount,
             String message
     ) {}
