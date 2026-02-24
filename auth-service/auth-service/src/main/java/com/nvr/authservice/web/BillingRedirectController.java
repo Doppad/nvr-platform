@@ -30,7 +30,7 @@ public class BillingRedirectController {
         
         // Пытаемся автоматически обработать платеж, если webhook не пришел
         // Это безопасно - метод проверяет статус и не создаст дубликат подписки
-        // Добавляем retry с небольшой задержкой, так как Tinkoff может еще обрабатывать платеж
+        // Добавляем retry с небольшой задержкой, так как Tinkoff может еще обрабатывать платеж да
         boolean processed = false;
         for (int attempt = 0; attempt < 3 && !processed; attempt++) {
             try {

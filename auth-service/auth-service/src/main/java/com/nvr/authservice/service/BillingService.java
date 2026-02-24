@@ -4,14 +4,10 @@ import com.nvr.authservice.domain.AppUser;
 import com.nvr.authservice.domain.PaymentAttempt;
 import com.nvr.authservice.domain.PaymentAttemptCamera;
 import com.nvr.authservice.domain.SubscriptionPlan;
-import com.nvr.authservice.domain.UserSubscription;
 import com.nvr.authservice.repo.AppUserRepository;
 import com.nvr.authservice.repo.PaymentAttemptCameraRepository;
 import com.nvr.authservice.repo.PaymentAttemptRepository;
 import com.nvr.authservice.repo.SubscriptionPlanRepository;
-import com.nvr.authservice.repo.UserSubscriptionCameraRepository;
-import com.nvr.authservice.repo.UserSubscriptionRepository;
-import com.nvr.authservice.subscription.UserSubscriptionCamera;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,7 +18,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -39,9 +34,8 @@ public class BillingService {
     private final PaymentAttemptCameraRepository paymentAttemptCameraRepo;
     private final TinkoffApiClient tinkoffApiClient;
     private final SubscriptionPlanRepository planRepo;
-    private final UserSubscriptionRepository subscriptionRepo;
-    private final UserSubscriptionCameraRepository userSubscriptionCameraRepo;
     private final NvrCameraValidationService cameraValidationService;
+    private final SubscriptionService subscriptionService;
 
     @Value("${app.billing.public-base-url:https://pay.okodoma.ru}")
     private String publicBaseUrl;
@@ -199,16 +193,15 @@ public class BillingService {
     }
 
     /**
-     * Обрабатывает успешный платеж и создает подписку.
+     * Обрабатывает успешный платеж и создает подписку через SubscriptionService.
      * Идемпотентный метод: повторные вызовы не создают дубликаты.
      *
      * @param paymentId идентификатор платежа в системе Тинькофф
      * @param orderId номер заказа
      * @throws ResponseStatusException с HTTP статусами:
      *         - 404 NOT_FOUND если attempt не найден
-     *         - 409 CONFLICT для неконсистентных данных (неверное количество камер, план не найден и т.д.)
+     *         - 409 CONFLICT для неконсистентных данных
      */
-    @Transactional
     public void handleSuccessfulPayment(String paymentId, String orderId) {
         log.info("handleSuccessfulPayment called: PaymentId={}, OrderId={}", paymentId, orderId);
         
@@ -232,7 +225,7 @@ public class BillingService {
                     );
                 });
 
-        log.info("Found payment attempt in handleSuccessfulPayment: Id={}, Status={}, ProviderSessionId={}, PlanCode={}, UserId={}", 
+        log.info("Found payment attempt: Id={}, Status={}, ProviderSessionId={}, PlanCode={}, UserId={}", 
                 attempt.getId(), attempt.getStatus(), attempt.getProviderSessionId(), 
                 attempt.getPlanCode(), attempt.getUser().getId());
 
@@ -244,9 +237,9 @@ public class BillingService {
         }
 
         // Проверяем статус в Тинькофф
-        log.info("Checking payment status in handleSuccessfulPayment with PaymentId={}", paymentId);
+        log.info("Checking payment status with PaymentId={}", paymentId);
         TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentId);
-        log.info("Payment status from Tinkoff in handleSuccessfulPayment: Status={}, Success={}", state.status(), state.success());
+        log.info("Payment status from Tinkoff: Status={}, Success={}", state.status(), state.success());
         
         // Для тестовых платежей Тинькофф может возвращать AUTHORIZED вместо CONFIRMED
         if (!"CONFIRMED".equals(state.status()) && !"AUTHORIZED".equals(state.status())) {
@@ -258,7 +251,7 @@ public class BillingService {
 
         // ИДЕМПОТЕНТНОСТЬ: атомарное обновление статуса PENDING -> SUCCESS
         // Если статус уже не PENDING (изменился между проверкой и обновлением) - метод вернет 0
-        Long attemptId = attempt.getId(); // Сохраняем ID в final переменную для использования в lambda
+        Long attemptId = attempt.getId();
         int updated = paymentAttemptRepo.updateStatusFromPendingToSuccess(attemptId);
         if (updated == 0) {
             // Статус уже был изменен другим потоком - идемпотентность
@@ -267,152 +260,25 @@ public class BillingService {
             return; // 200 OK - идемпотентность
         }
         
-        // Перезагружаем attempt для получения актуального статуса
-        attempt = paymentAttemptRepo.findById(attemptId)
-                .orElseThrow(() -> {
-                    log.error("Payment attempt {} not found after status update", attemptId);
-                    return new ResponseStatusException(
-                            HttpStatus.NOT_FOUND,
-                            "Payment attempt not found after status update"
-                    );
-                });
-        
         log.info("Updated payment attempt status to SUCCESS: AttemptId={}", attemptId);
 
-        // Создаем подписку
-        // Сохраняем значения в final переменные для использования в lambda
-        final Long finalAttemptId = attempt.getId();
-        final String planCode = attempt.getPlanCode();
-        
-        SubscriptionPlan plan = planRepo.findByCode(planCode)
-                .orElseThrow(() -> {
-                    log.error("Plan not found for payment attempt {}: PlanCode={}", finalAttemptId, planCode);
-                    return new ResponseStatusException(
-                            HttpStatus.CONFLICT,
-                            "Plan not found: " + planCode
-                    );
-                });
-
-        Instant now = Instant.now();
-        Instant endsAt = now.plus(30, ChronoUnit.DAYS); // подписка на 30 дней
-
-        log.info("Creating subscription: UserId={}, PlanCode={}, StartsAt={}, EndsAt={}", 
-                attempt.getUser().getId(), plan.getCode(), now, endsAt);
-
-        UserSubscription subscription = UserSubscription.builder()
-                .user(attempt.getUser())
-                .plan(plan)
-                .startsAt(now)
-                .endsAt(endsAt)
-                .active(true)
-                .build();
-
-        subscriptionRepo.save(subscription);
-        log.info("Subscription saved: SubscriptionId={}, UserId={}, PlanCode={}, Active={}, EndsAt={}", 
-                subscription.getId(), attempt.getUser().getId(), plan.getCode(), subscription.isActive(), subscription.getEndsAt());
-
         // Получаем сохраненные cameraIds из PaymentAttempt
-        List<PaymentAttemptCamera> paymentCameras = paymentAttemptCameraRepo.findByPaymentAttemptId(attempt.getId());
+        List<PaymentAttemptCamera> paymentCameras = paymentAttemptCameraRepo.findByPaymentAttemptId(attemptId);
         List<Long> cameraIds = paymentCameras.stream()
                 .map(PaymentAttemptCamera::getCameraId)
                 .collect(Collectors.toList());
 
         log.info("Found {} camera(s) for payment attempt: CameraIds={}", cameraIds.size(), cameraIds);
 
-        // СТРОГАЯ ВАЛИДАЦИЯ: проверяем размер списка камер в соответствии с планом
-        Integer expectedCameraCount = plan.getCameraQuota();
-        if (expectedCameraCount == null) {
-            log.error("Plan {} has no cameraQuota configured. Cannot validate camera count. PaymentAttemptId={}", 
-                    plan.getCode(), attempt.getId());
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Plan " + plan.getCode() + " has no cameraQuota configured"
-            );
-        }
+        // Создаем подписку через SubscriptionService (в отдельной транзакции)
+        subscriptionService.handleSuccessfulPayment(
+                attempt.getUser().getId(),
+                attempt.getPlanCode(),
+                cameraIds
+        );
 
-        if (cameraIds.isEmpty()) {
-            log.error("Payment attempt {} has no cameras saved. Cannot create subscription.", attempt.getId());
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Payment attempt has no cameras saved. Cannot create subscription."
-            );
-        }
-
-        if (cameraIds.size() != expectedCameraCount) {
-            log.error("Payment attempt {} has incorrect camera count. Expected: {}, Actual: {}, CameraIds: {}", 
-                    attempt.getId(), expectedCameraCount, cameraIds.size(), cameraIds);
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    String.format("Payment attempt has incorrect camera count. Plan %s requires exactly %d camera(s), but %d found in payment attempt", 
-                            plan.getCode(), expectedCameraCount, cameraIds.size())
-            );
-        }
-
-        // СТРОГАЯ ВАЛИДАЦИЯ: проверяем принадлежность камер пользователю (использует актуальную модель через addressId)
-        // Работает в webhook-контексте без SecurityContext/JWT
-        Long userAddressId = attempt.getUser().getAddressId();
-        try {
-            cameraValidationService.validateCameraOwnership(attempt.getUser().getId(), userAddressId, cameraIds);
-            log.info("Camera ownership validated for user {} (addressId={}): CameraIds={}", 
-                    attempt.getUser().getId(), userAddressId, cameraIds);
-        } catch (ResponseStatusException e) {
-            log.error("Camera ownership validation failed for user {} (addressId={}): CameraIds={}, Error: {}", 
-                    attempt.getUser().getId(), userAddressId, cameraIds, e.getMessage());
-            // Пробрасываем ResponseStatusException как есть (уже содержит правильный HTTP статус)
-            throw e;
-        }
-
-        // ИДЕМПОТЕНТНОСТЬ уже проверена выше: если статус не PENDING, метод возвращается раньше
-        // Дополнительная защита: проверяем, что подписка еще не была создана для этого платежа
-        // (на случай, если статус был изменен вручную или есть race condition)
-
-        // Проверяем, что у этого пользователя нет активных подписок на эти камеры
-        for (Long cameraId : cameraIds) {
-            // Проверяем активные подписки на эту камеру ДЛЯ ЭТОГО ПОЛЬЗОВАТЕЛЯ
-            List<UserSubscriptionCamera> existingCameras = userSubscriptionCameraRepo
-                    .findActiveByCameraIdAndUserId(cameraId, attempt.getUser().getId(), now);
-
-            if (!existingCameras.isEmpty()) {
-                String existingSubscriptionIds = existingCameras.stream()
-                        .map(usc -> usc.getUserSubscription().getId().toString())
-                        .collect(Collectors.joining(", "));
-                log.error("User {} already has active subscription(s) for camera {}: SubscriptionIds={}", 
-                        attempt.getUser().getId(), cameraId, existingSubscriptionIds);
-                throw new ResponseStatusException(
-                        HttpStatus.CONFLICT,
-                        String.format("User already has an active subscription for camera %d. Subscription IDs: %s", 
-                                cameraId, existingSubscriptionIds)
-                );
-            }
-        }
-
-        // Создаем записи UserSubscriptionCamera для каждой камеры
-        int createdCount = 0;
-        for (Long cameraId : cameraIds) {
-            // Проверяем, не создана ли уже запись (защита от дублей)
-            boolean alreadyExists = userSubscriptionCameraRepo.findAll().stream()
-                    .anyMatch(usc -> usc.getUserSubscription().getId().equals(subscription.getId())
-                            && usc.getCameraId().equals(cameraId));
-
-            if (alreadyExists) {
-                log.warn("UserSubscriptionCamera already exists: SubscriptionId={}, CameraId={}", 
-                        subscription.getId(), cameraId);
-                continue;
-            }
-
-            UserSubscriptionCamera subscriptionCamera = UserSubscriptionCamera.builder()
-                    .userSubscription(subscription)
-                    .cameraId(cameraId)
-                    .build();
-
-            userSubscriptionCameraRepo.save(subscriptionCamera);
-            createdCount++;
-            log.debug("Created UserSubscriptionCamera: SubscriptionId={}, CameraId={}", 
-                    subscription.getId(), cameraId);
-        }
-
-        log.info("Created {} camera subscription(s) for user {}: Plan={}, PaymentId={}, SubscriptionId={}, CameraIds={}",
-                createdCount, attempt.getUser().getId(), plan.getCode(), paymentId, subscription.getId(), cameraIds);
+        log.info("Successfully processed payment and created subscription: PaymentId={}, UserId={}, PlanCode={}, CameraIds={}",
+                paymentId, attempt.getUser().getId(), attempt.getPlanCode(), cameraIds);
     }
 
     /**
@@ -452,7 +318,11 @@ public class BillingService {
      * @param paymentId идентификатор платежа в системе Тинькофф (может быть null)
      * @return true, если платеж был успешно обработан, false если уже обработан или не найден
      */
-    @Transactional
+    /**
+     * Пытается обработать платеж. HTTP запрос к Tinkoff выполняется БЕЗ транзакции,
+     * чтобы не держать транзакцию открытой во время внешнего вызова.
+     * handleSuccessfulPayment вызывается в отдельной транзакции.
+     */
     public boolean tryProcessPayment(String orderId, String paymentId) {
         try {
             log.info("tryProcessPayment called: PaymentId={}, OrderId={}", paymentId, orderId);
@@ -464,7 +334,7 @@ public class BillingService {
                 return false;
             }
 
-            // Пытаемся найти платеж: сначала по paymentId, потом по orderId
+            // Читаем attempt БЕЗ транзакции (только чтение)
             PaymentAttempt attempt = null;
             if (paymentId != null) {
                 attempt = paymentAttemptRepo.findByProviderSessionId(paymentId).orElse(null);
@@ -512,9 +382,9 @@ public class BillingService {
                 log.info("Using paymentId from DB: {}", paymentIdForCheck);
             }
 
-            log.info("Checking payment status with PaymentId={}", paymentIdForCheck);
-            
-            // Проверяем статус в Тинькофф
+            // ВАЖНО: HTTP запрос к Tinkoff выполняется БЕЗ транзакции
+            // чтобы не держать транзакцию открытой во время внешнего вызова
+            log.info("Checking payment status with PaymentId={} (outside transaction)", paymentIdForCheck);
             TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentIdForCheck);
             log.info("Payment status from Tinkoff: Status={}, Success={}", state.status(), state.success());
             
@@ -525,7 +395,8 @@ public class BillingService {
             }
 
             // Обрабатываем успешный платеж (создает подписку)
-            log.info("Calling handleSuccessfulPayment with PaymentId={}, OrderId={}", paymentIdForCheck, orderId);
+            log.info("Calling handleSuccessfulPayment with PaymentId={}, OrderId={}", 
+                    paymentIdForCheck, orderId);
             handleSuccessfulPayment(paymentIdForCheck, orderId);
             log.info("Successfully processed payment from redirect page: PaymentId={}, OrderId={}", paymentIdForCheck, orderId);
             return true;
