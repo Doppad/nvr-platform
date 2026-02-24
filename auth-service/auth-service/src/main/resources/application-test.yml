@@ -1,0 +1,4 @@
+app:
+  auth:
+    bypass-otp: true
+    test-user-email: tester@example.com

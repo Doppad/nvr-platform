@@ -9,16 +9,20 @@ import com.nvr.authservice.repo.OtpAttemptRepository;
 import com.nvr.authservice.domain.AppUser;
 import com.nvr.authservice.web.AuthController;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.nvr.authservice.web.AuthController.TokenPairResp;
 
 import java.time.OffsetDateTime;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AuthService {
@@ -33,9 +37,16 @@ public class AuthService {
     private final EmailValidationService emailValidationService;
     private final AddressValidationService addressValidationService;
     private final OtpAttemptRepository otpAttemptRepository;
+    private final Environment environment;
 
     @Value("${app.jwt.ttl-minutes}")
     private long accessTtlMinutes;
+
+    @Value("${app.auth.bypass-otp:false}")
+    private boolean bypassOtp;
+
+    @Value("${app.auth.test-user-email:}")
+    private String testUserEmail;
 
     @Transactional
     public String requestOtp(String email) {
@@ -59,9 +70,22 @@ public class AuthService {
     public TokenPairResp verifyOtp(String email, String code, String userAgent, String ip) {
         String normalizedEmail = emailValidationService.validateAndNormalize(email);
 
-        boolean ok = otpService.verify(normalizedEmail, code);
+        // Проверка для тестового профиля: пропуск OTP для тестового пользователя
+        boolean isTestProfile = Arrays.asList(environment.getActiveProfiles()).contains("test");
+        boolean shouldBypassOtp = isTestProfile
+                && bypassOtp
+                && testUserEmail != null
+                && !testUserEmail.isBlank()
+                && normalizedEmail.equalsIgnoreCase(testUserEmail);
+
+        // Проверяем OTP: либо bypass активен, либо OTP верный
+        boolean ok = shouldBypassOtp || otpService.verify(normalizedEmail, code);
         if (!ok) {
             throw new InvalidOtpException("Неверный или истёкший код подтверждения");
+        }
+
+        if (shouldBypassOtp) {
+            log.warn("Test login bypass used for email: {}", normalizedEmail);
         }
 
         AppUser user = userRepo.findByEmail(normalizedEmail)
