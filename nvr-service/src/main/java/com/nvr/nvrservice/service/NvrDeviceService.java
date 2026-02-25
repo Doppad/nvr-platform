@@ -27,8 +27,10 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.UnknownHostException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -196,8 +198,11 @@ public class NvrDeviceService {
         int camerasCount = req.getCamerasCount() != null ? req.getCamerasCount() : 0;
         String timezone = (req.getTimezone() == null || req.getTimezone().isBlank()) ? "UTC" : req.getTimezone();
 
+        // Разрешаем доменное имя в IP адрес (если это домен) или оставляем IP как есть
+        String resolvedIp = resolveHostToIp(req.getIp());
+        
         // Нормализуем IP и порт для поиска/создания
-        String normalizedIp = normalizeIp(req.getIp());
+        String normalizedIp = normalizeIp(resolvedIp);
         Integer normalizedPort = normalizePort(req.getPort());
 
         // FIND-OR-CREATE: ищем существующее устройство по ключу (address_id, ip, port)
@@ -409,6 +414,56 @@ public class NvrDeviceService {
     }
 
     /**
+     * Разрешает доменное имя или IP адрес в IP адрес.
+     * Если передан домен (например, okodoma-tp.ru), разрешает его в IP адрес.
+     * Если передан уже IP адрес (IPv4 или IPv6), возвращает его как есть.
+     * 
+     * @param host доменное имя или IP адрес
+     * @return IP адрес в виде строки (IPv4 или IPv6)
+     * @throws ResponseStatusException если хост не может быть разрешен
+     */
+    private String resolveHostToIp(String host) {
+        if (host == null || host.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Host cannot be null or empty"
+            );
+        }
+        
+        String trimmedHost = host.trim();
+        
+        // Сначала проверяем, является ли это уже валидным IP адресом
+        try {
+            InetAddress addr = InetAddress.getByName(trimmedHost);
+            String ipAddress = addr.getHostAddress();
+            
+            // Если getHostAddress() вернул то же самое, что и входная строка,
+            // значит это уже был IP адрес, а не домен
+            if (ipAddress.equals(trimmedHost)) {
+                log.debug("Input '{}' is already an IP address", trimmedHost);
+                return ipAddress;
+            }
+            
+            // Это был домен, который успешно разрешен
+            log.info("Resolved hostname '{}' to IP address '{}'", trimmedHost, ipAddress);
+            return ipAddress;
+        } catch (UnknownHostException e) {
+            log.error("Failed to resolve host '{}': {}", trimmedHost, e.getMessage());
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    String.format("Cannot resolve host '%s': %s. Please provide a valid IP address or domain name.", 
+                            trimmedHost, e.getMessage())
+            );
+        } catch (Exception e) {
+            log.error("Unexpected error while resolving host '{}': {}", trimmedHost, e.getMessage(), e);
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    String.format("Error resolving host '%s': %s", trimmedHost, e.getMessage())
+            );
+        }
+    }
+
+    /**
      * Нормализует IP адрес для использования в качестве ключа поиска.
      * Убирает пробелы, приводит к нижнему регистру, убирает протокол если есть.
      * 
@@ -494,8 +549,17 @@ public class NvrDeviceService {
         Integer oldHttpPort = device.getHttpPort();
         String oldVendor = device.getVendor();
         
+        // Разрешаем IP/домен заранее для использования в проверке изменений
+        String resolvedIp = null;
+        if (req.getIp() != null) {
+            resolvedIp = resolveHostToIp(req.getIp());
+        }
+        
         if (req.getName() != null) device.setName(req.getName());
-        if (req.getIp() != null) device.setIp(req.getIp());
+        if (req.getIp() != null) {
+            // Разрешаем доменное имя в IP адрес (если это домен) или оставляем IP как есть
+            device.setIp(resolvedIp);
+        }
         if (req.getPort() != null) device.setPort(req.getPort());
         if (req.getHttpPort() != null) device.setHttpPort(req.getHttpPort());
         if (req.getAddress() != null) device.setAddress(req.getAddress());
@@ -535,9 +599,10 @@ public class NvrDeviceService {
         // Проверяем, изменились ли критичные поля, требующие пересинхронизации
         // Критичные поля: IP, порты, vendor - влияют на подключение к устройству
         boolean needsResync = false;
-        if (req.getIp() != null && !req.getIp().equals(oldIp)) {
+        if (resolvedIp != null && !resolvedIp.equals(oldIp)) {
             needsResync = true;
-            log.info("Device {} IP changed from {} to {}, triggering resync", device.getId(), oldIp, req.getIp());
+            log.info("Device {} IP changed from {} to {} (resolved from '{}'), triggering resync", 
+                    device.getId(), oldIp, resolvedIp, req.getIp());
         }
         if (req.getPort() != null && !req.getPort().equals(oldPort)) {
             needsResync = true;
