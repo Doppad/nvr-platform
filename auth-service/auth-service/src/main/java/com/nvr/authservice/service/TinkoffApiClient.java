@@ -82,6 +82,9 @@ public class TinkoffApiClient {
             receipt.put("Phone", phone);
         }
         
+        // Обязательное поле Taxation (система налогообложения)
+        receipt.put("Taxation", "usn_income");
+        
         // Items (список товаров)
         List<Map<String, Object>> items = new ArrayList<>();
         Map<String, Object> item = new HashMap<>();
