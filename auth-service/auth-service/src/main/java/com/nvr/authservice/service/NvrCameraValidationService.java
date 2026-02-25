@@ -22,8 +22,10 @@ public class NvrCameraValidationService {
 
     private final RestTemplate restTemplate;
 
-    @Value("${app.nvr-service.base-url:http://localhost:8082}")
+    @Value("${nvr.base-url}")
     private String nvrServiceBaseUrl;
+//     @Value("${app.nvr-service.base-url:http://localhost:8082}")
+//     private String nvrServiceBaseUrl;
 
     /**
      * Проверяет, что все камеры принадлежат указанному пользователю.
