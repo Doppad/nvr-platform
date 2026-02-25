@@ -45,6 +45,9 @@ public class TinkoffApiClient {
      * @param successUrl URL для редиректа после успешной оплаты
      * @param failUrl URL для редиректа после неуспешной оплаты
      * @param description описание платежа
+     * @param email email покупателя (для Receipt)
+     * @param phone телефон покупателя (для Receipt, опционально)
+     * @param itemName название товара (для Receipt)
      * @return результат создания платежа
      */
     public TinkoffInitResponse initPayment(
@@ -52,7 +55,10 @@ public class TinkoffApiClient {
             String orderId,
             String successUrl,
             String failUrl,
-            String description
+            String description,
+            String email,
+            String phone,
+            String itemName
     ) {
         Map<String, Object> requestData = new HashMap<>();
         requestData.put("TerminalKey", terminalKey);
@@ -65,6 +71,30 @@ public class TinkoffApiClient {
         }
         requestData.put("PayType", "O"); // O - одностадийная оплата
 
+        // Формируем Receipt для фискализации
+        Map<String, Object> receipt = new HashMap<>();
+        
+        // Email или Phone покупателя (обязательно хотя бы одно для Receipt)
+        if (email != null && !email.isBlank()) {
+            receipt.put("Email", email);
+        }
+        if (phone != null && !phone.isBlank()) {
+            receipt.put("Phone", phone);
+        }
+        
+        // Items (список товаров)
+        List<Map<String, Object>> items = new ArrayList<>();
+        Map<String, Object> item = new HashMap<>();
+        item.put("Name", itemName != null && !itemName.isBlank() ? itemName : description);
+        item.put("Price", amountMinor);
+        item.put("Quantity", 1);
+        item.put("Amount", amountMinor);
+        item.put("Tax", "none"); // НДС не облагается (или "vat10", "vat20" в зависимости от вашего случая)
+        items.add(item);
+        receipt.put("Items", items);
+        
+        requestData.put("Receipt", receipt);
+
         // Формируем подпись (Token)
         String token = generateToken(requestData);
         requestData.put("Token", token);
@@ -74,15 +104,23 @@ public class TinkoffApiClient {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
 
+            // Логируем запрос перед отправкой
+            log.info("TINKOFF INIT REQUEST: {}", objectMapper.writeValueAsString(requestData));
+
             HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestData, headers);
             ResponseEntity<String> response = restTemplate.postForEntity(url, request, String.class);
 
+            String responseBody = response.getBody();
+            
+            // Логируем ответ после получения
+            log.info("TINKOFF INIT RESPONSE: {}", responseBody);
+
             if (!response.getStatusCode().is2xxSuccessful()) {
-                log.error("Tinkoff Init failed: status={}, body={}", response.getStatusCode(), response.getBody());
+                log.error("Tinkoff Init failed: status={}, body={}", response.getStatusCode(), responseBody);
                 throw new RuntimeException("Failed to create payment: " + response.getStatusCode());
             }
 
-            JsonNode jsonResponse = objectMapper.readTree(response.getBody());
+            JsonNode jsonResponse = objectMapper.readTree(responseBody);
             boolean success = jsonResponse.get("Success").asBoolean();
             String errorCode = jsonResponse.has("ErrorCode") ? jsonResponse.get("ErrorCode").asText() : null;
             String message = jsonResponse.has("Message") ? jsonResponse.get("Message").asText() : null;
@@ -158,25 +196,61 @@ public class TinkoffApiClient {
 
     /**
      * Генерирует подпись (Token) для запроса к API Тинькофф.
-     * Алгоритм: сортировка полей, конкатенация значений, SHA256.
+     * 
+     * Алгоритм согласно документации Тинькофф:
+     * 1. Берем только top-level поля запроса
+     * 2. Исключаем поля "Token" и "Receipt" из расчета
+     * 3. Сортируем поля по ключу (алфавитно)
+     * 4. Склеиваем значения в строку
+     * 5. Добавляем Password в конец
+     * 6. Вычисляем SHA-256 от итоговой строки
      *
-     * @param data данные запроса
-     * @return подпись
+     * @param data данные запроса (может содержать Token и Receipt, они будут исключены)
+     * @return подпись в hex формате
      */
     private String generateToken(Map<String, Object> data) {
-        // Добавляем Password в конец
-        Map<String, Object> dataWithPassword = new TreeMap<>(data);
-        dataWithPassword.put("Password", password);
+        // Создаем копию данных без Token и Receipt
+        Map<String, Object> dataForToken = new HashMap<>();
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            String key = entry.getKey();
+            // Исключаем Token и Receipt из расчета подписи
+            if (!"Token".equals(key) && !"Receipt".equals(key)) {
+                Object value = entry.getValue();
+                // Убеждаемся, что числовые значения (Amount, Price) представлены как Long (integer)
+                // Это важно для корректной конкатенации
+                if (value instanceof Number) {
+                    // Преобразуем Number в Long для единообразия (Amount всегда в копейках - integer)
+                    if (value instanceof Long) {
+                        dataForToken.put(key, value);
+                    } else if (value instanceof Integer) {
+                        dataForToken.put(key, ((Integer) value).longValue());
+                    } else {
+                        // Для других Number типов (Double, BigDecimal) - преобразуем в Long
+                        // Это важно, так как Amount должен быть integer в копейках
+                        log.warn("Converting Number {} to Long for token calculation: key={}, value={}", 
+                                value.getClass().getSimpleName(), key, value);
+                        dataForToken.put(key, ((Number) value).longValue());
+                    }
+                } else {
+                    dataForToken.put(key, value);
+                }
+            }
+        }
+        
+        // Добавляем Password в конец (после сортировки)
+        // Сортируем по ключу (алфавитно) - TreeMap автоматически сортирует
+        Map<String, Object> sortedData = new TreeMap<>(dataForToken);
+        sortedData.put("Password", password);
 
-        // Конкатенируем все значения
+        // Конкатенируем все значения в порядке сортировки ключей
         StringBuilder sb = new StringBuilder();
-        for (Object value : dataWithPassword.values()) {
+        for (Object value : sortedData.values()) {
             if (value != null) {
                 sb.append(value);
             }
         }
 
-        // Вычисляем SHA256
+        // Вычисляем SHA-256
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest(sb.toString().getBytes(StandardCharsets.UTF_8));
@@ -243,9 +317,9 @@ public class TinkoffApiClient {
 
     /**
      * Проверяет подпись (Token) в webhook от Тинькофф.
-     * Алгоритм такой же, как при генерации: все поля кроме Token + Password, сортировка, конкатенация, SHA256.
+     * Алгоритм такой же, как при генерации: все поля кроме Token и Receipt + Password, сортировка, конкатенация, SHA256.
      *
-     * @param data данные из webhook (включая Token)
+     * @param data данные из webhook (включая Token, может включать Receipt)
      * @param receivedToken токен, полученный в webhook
      * @return true, если подпись валидна
      */
@@ -255,12 +329,9 @@ public class TinkoffApiClient {
             return false;
         }
 
-        // Создаем копию данных без Token
-        Map<String, Object> dataWithoutToken = new HashMap<>(data);
-        dataWithoutToken.remove("Token");
-
-        // Генерируем ожидаемый токен
-        String expectedToken = generateToken(dataWithoutToken);
+        // generateToken уже исключает Token и Receipt, поэтому просто передаем все данные
+        // Генерируем ожидаемый токен (Token и Receipt будут автоматически исключены)
+        String expectedToken = generateToken(data);
 
         boolean isValid = expectedToken.equalsIgnoreCase(receivedToken);
         if (!isValid) {

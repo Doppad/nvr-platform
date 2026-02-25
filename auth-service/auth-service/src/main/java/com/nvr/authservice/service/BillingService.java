@@ -179,7 +179,10 @@ public class BillingService {
                 orderId,
                 successUrl,
                 failUrl,
-                description
+                description,
+                user.getEmail(),
+                user.getPhone(),
+                plan.getTitle()
         );
 
         // Обновляем запись о попытке платежа с PaymentId от Тинькофф
