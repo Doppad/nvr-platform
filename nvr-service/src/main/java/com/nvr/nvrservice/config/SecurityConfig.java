@@ -88,7 +88,8 @@ public class SecurityConfig {
                                 "/actuator/**",                    // системные эндпоинты
                                 "/swagger-ui/**",                 // Swagger UI
                                 "/v3/api-docs/**",                // OpenAPI
-                                "/nvr/addresses/*/exists"         // публичный эндпоинт для проверки существования адреса (используется при регистрации)
+                                "/nvr/addresses/*/exists",        // публичный эндпоинт для проверки существования адреса (используется при регистрации)
+                                "/api/cameras/validate-ownership" // публичный эндпоинт для проверки владения камерами (используется при создании платежа)
                         ).permitAll()
                         .anyRequest().authenticated()
                 )
