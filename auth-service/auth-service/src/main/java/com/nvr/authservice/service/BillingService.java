@@ -608,6 +608,99 @@ public class BillingService {
     }
 
     /**
+     * Проверяет статус платежа по orderId.
+     * Для PENDING платежей вызывает Tinkoff API для проверки актуального статуса.
+     *
+     * @param orderId номер заказа
+     * @return статус платежа: "ACTIVE" (SUCCESS), "PROCESSING" (PENDING), "FAILED" (FAILED)
+     * @throws ResponseStatusException если платеж не найден
+     */
+    @Transactional
+    public PaymentStatusResponse checkPaymentStatus(String orderId) {
+        log.info("checkPaymentStatus called: OrderId={}", orderId);
+
+        // Находим PaymentAttempt по orderId
+        PaymentAttempt attempt = paymentAttemptRepo.findByOrderId(orderId)
+                .orElseThrow(() -> {
+                    log.error("Payment attempt not found: OrderId={}", orderId);
+                    return new ResponseStatusException(
+                            HttpStatus.NOT_FOUND,
+                            "Payment attempt not found for OrderId=" + orderId
+                    );
+                });
+
+        log.info("Found payment attempt: Id={}, Status={}, OrderId={}",
+                attempt.getId(), attempt.getStatus(), orderId);
+
+        // Если статус SUCCESS - возвращаем ACTIVE
+        if ("SUCCESS".equals(attempt.getStatus())) {
+            return new PaymentStatusResponse("ACTIVE");
+        }
+
+        // Если статус FAILED - возвращаем FAILED
+        if ("FAILED".equals(attempt.getStatus())) {
+            return new PaymentStatusResponse("FAILED");
+        }
+
+        // Если статус PENDING - проверяем статус в Tinkoff API
+        if ("PENDING".equals(attempt.getStatus())) {
+            String paymentId = attempt.getProviderSessionId();
+            
+            // Проверяем, что paymentId доступен (не временный orderId)
+            if (paymentId == null || paymentId.startsWith("ORDER_")) {
+                log.warn("PaymentId not yet available for OrderId={}, ProviderSessionId={}", orderId, paymentId);
+                return new PaymentStatusResponse("PROCESSING");
+            }
+
+            // Вызываем TinkoffApiClient.getState для проверки статуса
+            log.info("Checking payment status with PaymentId={} for OrderId={}", paymentId, orderId);
+            TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentId);
+            log.info("Payment status from Tinkoff: Status={}, Success={} for OrderId={}",
+                    state.status(), state.success(), orderId);
+
+            // Если статус CONFIRMED или AUTHORIZED - обрабатываем успешный платеж
+            if ("CONFIRMED".equals(state.status()) || "AUTHORIZED".equals(state.status())) {
+                log.info("Payment confirmed in Tinkoff, processing: PaymentId={}, OrderId={}", paymentId, orderId);
+                // handleSuccessfulPayment уже использует SELECT FOR UPDATE и идемпотентен
+                handleSuccessfulPayment(paymentId, orderId);
+                return new PaymentStatusResponse("ACTIVE");
+            }
+
+            // Если статус FAILED, REJECTED, CANCELED - обновляем статус
+            if ("REJECTED".equals(state.status()) || "CANCELED".equals(state.status()) || 
+                "FAILED".equals(state.status())) {
+                log.info("Payment failed in Tinkoff: PaymentId={}, OrderId={}, Status={}",
+                        paymentId, orderId, state.status());
+                // Обновляем статус только если он все еще PENDING (защита от race condition)
+                if ("PENDING".equals(attempt.getStatus())) {
+                    attempt.setStatus("FAILED");
+                    paymentAttemptRepo.save(attempt);
+                    log.info("Updated payment attempt status to FAILED: AttemptId={}, OrderId={}",
+                            attempt.getId(), orderId);
+                }
+                return new PaymentStatusResponse("FAILED");
+            }
+
+            // Если статус все еще PENDING или другой промежуточный статус - возвращаем PROCESSING
+            log.info("Payment still processing: PaymentId={}, OrderId={}, Status={}",
+                    paymentId, orderId, state.status());
+            return new PaymentStatusResponse("PROCESSING");
+        }
+
+        // Для других статусов возвращаем FAILED
+        log.warn("Payment in unexpected status: OrderId={}, Status={}", orderId, attempt.getStatus());
+        return new PaymentStatusResponse("FAILED");
+    }
+
+    /**
+     * DTO ответа о статусе платежа.
+     */
+    public record PaymentStatusResponse(
+            String status // "ACTIVE", "PROCESSING", "FAILED"
+    ) {
+    }
+
+    /**
      * DTO информации о плане подписки для фронтенда.
      */
     public record PlanInfo(

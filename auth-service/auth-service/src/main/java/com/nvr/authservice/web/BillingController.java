@@ -114,6 +114,38 @@ public class BillingController {
     }
 
     /**
+     * Проверяет статус платежа по orderId.
+     * Используется для улучшения UX - позволяет пользователю получить статус сразу после оплаты,
+     * не дожидаясь webhook или scheduled task.
+     *
+     * @param orderId номер заказа
+     * @return статус платежа: { "status": "ACTIVE" | "PROCESSING" | "FAILED" }
+     */
+    @GetMapping("/status")
+    public ResponseEntity<?> checkPaymentStatus(@RequestParam String orderId) {
+        try {
+            log.info("Payment status check requested: OrderId={}", orderId);
+
+            if (orderId == null || orderId.isBlank()) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("status", "ERROR", "message", "orderId is required"));
+            }
+
+            BillingService.PaymentStatusResponse response = billingService.checkPaymentStatus(orderId);
+
+            return ResponseEntity.ok(Map.of("status", response.status()));
+        } catch (org.springframework.web.server.ResponseStatusException e) {
+            log.error("Payment status check failed: OrderId={}, Error={}", orderId, e.getMessage());
+            return ResponseEntity.status(e.getStatusCode())
+                    .body(Map.of("status", "ERROR", "message", e.getReason()));
+        } catch (Exception e) {
+            log.error("Error checking payment status: OrderId={}, Error={}", orderId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("status", "ERROR", "message", "Internal error"));
+        }
+    }
+
+    /**
      * Webhook для уведомлений от Тинькофф о статусе платежа.
      * Тинькофф отправляет POST запросы с данными о платеже.
      */
