@@ -211,6 +211,16 @@ public class BillingService {
     }
 
     /**
+     * Делегирует возврат платежа по orderId в отдельный сервис с REQUIRES_NEW транзакцией.
+     *
+     * @param orderId номер заказа
+     * @param userId  идентификатор пользователя (для проверки владельца платежа)
+     */
+    public void handleRefundByOrderId(String orderId, Long userId) {
+        billingProcessingService.handleRefundByOrderId(orderId, userId);
+    }
+
+    /**
      * Делегирует обработку неуспешного платежа в отдельный сервис с REQUIRES_NEW транзакцией.
      */
     public void handleFailedPayment(String paymentId, String orderId) {

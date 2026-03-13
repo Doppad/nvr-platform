@@ -93,7 +93,7 @@ public class BillingController {
     public ResponseEntity<?> refund(@PathVariable String paymentId) {
         try {
             Long userId = currentUserIdOrThrow();
-            log.info("Refund request: PaymentId={}, UserId={}", paymentId, userId);
+            log.info("Refund request by paymentId: PaymentId={}, UserId={}", paymentId, userId);
 
             billingService.handleRefund(paymentId, userId);
 
@@ -103,11 +103,49 @@ public class BillingController {
                     "paymentId", paymentId
             ));
         } catch (org.springframework.web.server.ResponseStatusException e) {
-            log.error("Refund failed: PaymentId={}, Error={}", paymentId, e.getMessage());
+            log.error("Refund by paymentId failed: PaymentId={}, Error={}", paymentId, e.getMessage());
             return ResponseEntity.status(e.getStatusCode())
                     .body(Map.of("status", "ERROR", "message", e.getReason()));
         } catch (Exception e) {
-            log.error("Error processing refund: PaymentId={}, Error={}", paymentId, e.getMessage(), e);
+            log.error("Error processing refund by paymentId: PaymentId={}, Error={}", paymentId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("status", "ERROR", "message", "Internal error"));
+        }
+    }
+
+    /**
+     * Выполняет возврат средств по платежу по orderId.
+     * Фронтенд знает только orderId после редиректа /billing/redirect/success.
+     *
+     * Алгоритм:
+     * 1. Находит PaymentAttempt по orderId.
+     * 2. Берет providerSessionId (PaymentId в Тинькофф).
+     * 3. Вызывает TinkoffApiClient.cancelPayment(providerSessionId).
+     * 4. Обновляет статус PaymentAttempt на REFUNDED.
+     * 5. Возвращает ответ с orderId и статусом.
+     *
+     * @param orderId номер заказа
+     * @return 200 OK при успехе, 404 если orderId не найден, 400 если платеж не в статусе SUCCESS
+     */
+    @PostMapping("/refund/order/{orderId}")
+    public ResponseEntity<?> refundByOrderId(@PathVariable String orderId) {
+        try {
+            Long userId = currentUserIdOrThrow();
+            log.info("Refund request by orderId: OrderId={}, UserId={}", orderId, userId);
+
+            billingService.handleRefundByOrderId(orderId, userId);
+
+            return ResponseEntity.ok(Map.of(
+                    "status", "OK",
+                    "message", "Refund processed successfully",
+                    "orderId", orderId
+            ));
+        } catch (org.springframework.web.server.ResponseStatusException e) {
+            log.error("Refund by orderId failed: OrderId={}, Error={}", orderId, e.getMessage());
+            return ResponseEntity.status(e.getStatusCode())
+                    .body(Map.of("status", "ERROR", "message", e.getReason()));
+        } catch (Exception e) {
+            log.error("Error processing refund by orderId: OrderId={}, Error={}", orderId, e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("status", "ERROR", "message", "Internal error"));
         }

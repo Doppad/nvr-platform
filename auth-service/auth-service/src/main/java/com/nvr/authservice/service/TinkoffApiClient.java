@@ -319,6 +319,17 @@ public class TinkoffApiClient {
     }
 
     /**
+     * Отменяет/возвращает платеж по PaymentId.
+     * Обертка над refundPayment(paymentId, null) для удобства использования из бизнес-логики.
+     *
+     * @param paymentId идентификатор платежа в системе Тинькофф
+     */
+    public void cancelPayment(String paymentId) {
+        log.info("Tinkoff cancelPayment called for PaymentId={}", paymentId);
+        refundPayment(paymentId, null);
+    }
+
+    /**
      * Проверяет подпись (Token) в webhook от Тинькофф.
      * Алгоритм такой же, как при генерации: все поля кроме Token и Receipt + Password, сортировка, конкатенация, SHA256.
      *

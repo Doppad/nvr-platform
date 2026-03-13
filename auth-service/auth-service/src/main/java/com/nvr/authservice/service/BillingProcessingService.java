@@ -130,7 +130,7 @@ public class BillingProcessingService {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void handleRefund(String paymentId, Long userId) {
-        log.info("handleRefund called: PaymentId={}, UserId={}", paymentId, userId);
+        log.info("handleRefund called (by paymentId): PaymentId={}, UserId={}", paymentId, userId);
 
         // Находим платеж
         PaymentAttempt attempt = paymentAttemptRepo.findByProviderSessionId(paymentId)
@@ -200,6 +200,90 @@ public class BillingProcessingService {
 
         log.info("Successfully processed refund: PaymentId={}, UserId={}, PlanCode={}",
                 paymentId, attempt.getUser().getId(), attempt.getPlanCode());
+    }
+
+    /**
+     * Обрабатывает возврат средств по платежу по orderId.
+     * Используется, когда фронтенд знает только orderId после редиректа.
+     *
+     * Алгоритм:
+     * 1. Находит PaymentAttempt по orderId (с блокировкой FOR UPDATE).
+     * 2. Берет providerSessionId (PaymentId в Тинькофф).
+     * 3. Вызывает TinkoffApiClient.cancelPayment(providerSessionId).
+     * 4. Обновляет статус PaymentAttempt на REFUNDED.
+     * 5. Отменяет подписку через SubscriptionService.
+     *
+     * @param orderId номер заказа
+     * @param userId  идентификатор пользователя (для проверки владельца платежа)
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void handleRefundByOrderId(String orderId, Long userId) {
+        log.info("handleRefundByOrderId called: OrderId={}, UserId={}", orderId, userId);
+
+        // Находим платеж по orderId с блокировкой FOR UPDATE для защиты от гонок
+        PaymentAttempt attempt = paymentAttemptRepo.findByOrderIdForUpdate(orderId)
+                .orElseThrow(() -> {
+                    log.error("Payment attempt not found for refund by orderId: OrderId={}", orderId);
+                    return new ResponseStatusException(
+                            HttpStatus.NOT_FOUND,
+                            "Payment attempt not found for OrderId=" + orderId
+                    );
+                });
+
+        log.info("Found payment attempt for refund by orderId: Id={}, Status={}, ProviderSessionId={}, PlanCode={}, UserId={}",
+                attempt.getId(), attempt.getStatus(), attempt.getProviderSessionId(),
+                attempt.getPlanCode(), attempt.getUser().getId());
+
+        // Проверяем, что платеж принадлежит пользователю
+        if (!attempt.getUser().getId().equals(userId)) {
+            log.error("Payment with OrderId={} does not belong to user {}. Payment owner: {}",
+                    orderId, userId, attempt.getUser().getId());
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Payment does not belong to user"
+            );
+        }
+
+        // Если уже возвращен - идемпотентность
+        if ("REFUNDED".equals(attempt.getStatus())) {
+            log.info("Payment with OrderId={} already refunded. Returning OK (idempotent).", orderId);
+            return;
+        }
+
+        // Не даем вернуть платеж, если он не в статусе SUCCESS
+        if (!"SUCCESS".equals(attempt.getStatus())) {
+            log.warn("Payment with OrderId={} is not in SUCCESS status (current: {}). Cannot refund.",
+                    orderId, attempt.getStatus());
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Payment is not confirmed. Current status: " + attempt.getStatus()
+            );
+        }
+
+        String providerSessionId = attempt.getProviderSessionId();
+        if (providerSessionId == null || providerSessionId.isBlank() || providerSessionId.startsWith("ORDER_")) {
+            log.error("ProviderSessionId not available or invalid for refund by orderId: OrderId={}, ProviderSessionId={}",
+                    orderId, providerSessionId);
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Payment provider session id is not available for refund"
+            );
+        }
+
+        // Вызываем Tinkoff API для отмены платежа
+        log.info("Calling Tinkoff cancel API for PaymentId={} (OrderId={})", providerSessionId, orderId);
+        tinkoffApiClient.cancelPayment(providerSessionId);
+
+        // Обновляем статус на REFUNDED
+        attempt.setStatus("REFUNDED");
+        paymentAttemptRepo.save(attempt);
+        log.info("Updated payment attempt status to REFUNDED: AttemptId={}, OrderId={}", attempt.getId(), orderId);
+
+        // Отменяем подписку
+        subscriptionService.cancelSubscription(attempt.getUser().getId(), attempt.getPlanCode());
+
+        log.info("Successfully processed refund by orderId: OrderId={}, PaymentId={}, UserId={}, PlanCode={}",
+                orderId, providerSessionId, attempt.getUser().getId(), attempt.getPlanCode());
     }
 
     /**
