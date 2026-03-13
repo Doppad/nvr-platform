@@ -284,7 +284,7 @@ public class TinkoffApiClient {
         requestData.put("Token", token);
 
         try {
-            String url = API_BASE_URL + "/Refund";
+            String url = API_BASE_URL + "/Cancel";
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
 
