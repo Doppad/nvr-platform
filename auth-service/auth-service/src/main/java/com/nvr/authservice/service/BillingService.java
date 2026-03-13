@@ -36,6 +36,7 @@ public class BillingService {
     private final SubscriptionPlanRepository planRepo;
     private final NvrCameraValidationService cameraValidationService;
     private final SubscriptionService subscriptionService;
+    private final BillingProcessingService billingProcessingService;
 
     @Value("${app.billing.public-base-url:https://pay.okodoma.ru}")
     private String publicBaseUrl;
@@ -196,202 +197,24 @@ public class BillingService {
     }
 
     /**
-     * Обрабатывает успешный платеж и создает подписку через SubscriptionService.
-     * Идемпотентный метод: повторные вызовы не создают дубликаты.
-     *
-     * @param paymentId идентификатор платежа в системе Тинькофф
-     * @param orderId номер заказа
-     * @throws ResponseStatusException с HTTP статусами:
-     *         - 404 NOT_FOUND если attempt не найден
-     *         - 409 CONFLICT для неконсистентных данных
+     * Делегирует обработку успешного платежа в отдельный сервис с REQUIRES_NEW транзакцией.
      */
     public void handleSuccessfulPayment(String paymentId, String orderId) {
-        log.info("handleSuccessfulPayment called: PaymentId={}, OrderId={}", paymentId, orderId);
-        
-        // ИДЕМПОТЕНТНОСТЬ: находим attempt с блокировкой FOR UPDATE для предотвращения race conditions
-        PaymentAttempt attempt = paymentAttemptRepo.findByProviderSessionIdForUpdate(paymentId)
-                .orElseGet(() -> {
-                    if (orderId != null) {
-                        return paymentAttemptRepo.findByOrderIdForUpdate(orderId)
-                                .orElseThrow(() -> {
-                                    log.error("Payment attempt not found: PaymentId={}, OrderId={}", paymentId, orderId);
-                                    return new ResponseStatusException(
-                                            HttpStatus.NOT_FOUND,
-                                            "Payment attempt not found for PaymentId=" + paymentId + ", OrderId=" + orderId
-                                    );
-                                });
-                    }
-                    log.error("Payment attempt not found: PaymentId={}", paymentId);
-                    throw new ResponseStatusException(
-                            HttpStatus.NOT_FOUND,
-                            "Payment attempt not found for PaymentId=" + paymentId
-                    );
-                });
-
-        log.info("Found payment attempt: Id={}, Status={}, ProviderSessionId={}, PlanCode={}, UserId={}", 
-                attempt.getId(), attempt.getStatus(), attempt.getProviderSessionId(), 
-                attempt.getPlanCode(), attempt.getUser().getId());
-
-        // ИДЕМПОТЕНТНОСТЬ: если уже обработан - возвращаемся без побочных эффектов
-        if (!"PENDING".equals(attempt.getStatus())) {
-            log.info("Payment attempt {} already processed with status {}. Returning OK (idempotent).", 
-                    attempt.getId(), attempt.getStatus());
-            return; // 200 OK - идемпотентность
-        }
-
-        // Проверяем статус в Тинькофф
-        log.info("Checking payment status with PaymentId={}", paymentId);
-        TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentId);
-        log.info("Payment status from Tinkoff: Status={}, Success={}", state.status(), state.success());
-        
-        // Для тестовых платежей Тинькофф может возвращать AUTHORIZED вместо CONFIRMED
-        if (!"CONFIRMED".equals(state.status()) && !"AUTHORIZED".equals(state.status())) {
-            log.warn("Payment {} status is not CONFIRMED or AUTHORIZED: {}", paymentId, state.status());
-            attempt.setStatus("FAILED");
-            paymentAttemptRepo.save(attempt);
-            return;
-        }
-
-        // ИДЕМПОТЕНТНОСТЬ: атомарное обновление статуса PENDING -> SUCCESS
-        // Если статус уже не PENDING (изменился между проверкой и обновлением) - метод вернет 0
-        Long attemptId = attempt.getId();
-        int updated = paymentAttemptRepo.updateStatusFromPendingToSuccess(attemptId);
-        if (updated == 0) {
-            // Статус уже был изменен другим потоком - идемпотентность
-            log.info("Payment attempt {} status was already changed by another process. Returning OK (idempotent).", 
-                    attemptId);
-            return; // 200 OK - идемпотентность
-        }
-        
-        log.info("Updated payment attempt status to SUCCESS: AttemptId={}", attemptId);
-
-        // Получаем сохраненные cameraIds из PaymentAttempt
-        List<PaymentAttemptCamera> paymentCameras = paymentAttemptCameraRepo.findByPaymentAttemptId(attemptId);
-        List<Long> cameraIds = paymentCameras.stream()
-                .map(PaymentAttemptCamera::getCameraId)
-                .collect(Collectors.toList());
-
-        log.info("Found {} camera(s) for payment attempt: CameraIds={}", cameraIds.size(), cameraIds);
-
-        // Создаем подписку через SubscriptionService (в отдельной транзакции)
-        subscriptionService.handleSuccessfulPayment(
-                attempt.getUser().getId(),
-                attempt.getPlanCode(),
-                cameraIds
-        );
-
-        log.info("Successfully processed payment and created subscription: PaymentId={}, UserId={}, PlanCode={}, CameraIds={}",
-                paymentId, attempt.getUser().getId(), attempt.getPlanCode(), cameraIds);
+        billingProcessingService.handleSuccessfulPayment(paymentId, orderId);
     }
 
     /**
-     * Обрабатывает возврат средств по платежу.
-     * Проверяет статус платежа, вызывает Tinkoff API для возврата,
-     * обновляет статус PaymentAttempt и отменяет подписку.
-     *
-     * @param paymentId идентификатор платежа в системе Тинькофф
-     * @param userId ID пользователя (для проверки владельца платежа)
-     * @throws ResponseStatusException если платеж не найден, не подтвержден, уже возвращен или не принадлежит пользователю
+     * Делегирует возврат платежа в отдельный сервис с REQUIRES_NEW транзакцией.
      */
     public void handleRefund(String paymentId, Long userId) {
-        log.info("handleRefund called: PaymentId={}, UserId={}", paymentId, userId);
-
-        // Находим платеж
-        PaymentAttempt attempt = paymentAttemptRepo.findByProviderSessionId(paymentId)
-                .orElseThrow(() -> {
-                    log.error("Payment attempt not found: PaymentId={}", paymentId);
-                    return new ResponseStatusException(
-                            HttpStatus.NOT_FOUND,
-                            "Payment attempt not found: " + paymentId
-                    );
-                });
-
-        log.info("Found payment attempt: Id={}, Status={}, ProviderSessionId={}, PlanCode={}, UserId={}",
-                attempt.getId(), attempt.getStatus(), attempt.getProviderSessionId(),
-                attempt.getPlanCode(), attempt.getUser().getId());
-
-        // Проверяем, что платеж принадлежит пользователю
-        if (!attempt.getUser().getId().equals(userId)) {
-            log.error("Payment {} does not belong to user {}. Payment owner: {}",
-                    paymentId, userId, attempt.getUser().getId());
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Payment does not belong to user"
-            );
-        }
-
-        // Проверяем, что платеж подтвержден
-        if (!"SUCCESS".equals(attempt.getStatus())) {
-            log.warn("Payment {} is not confirmed (status: {}). Cannot refund.", paymentId, attempt.getStatus());
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Payment is not confirmed. Current status: " + attempt.getStatus()
-            );
-        }
-
-        // Проверяем, что платеж еще не был возвращен
-        if ("REFUNDED".equals(attempt.getStatus())) {
-            log.info("Payment {} already refunded. Returning OK (idempotent).", paymentId);
-            return; // Идемпотентность
-        }
-
-        // Проверяем статус в Тинькофф перед возвратом
-        log.info("Checking payment status before refund with PaymentId={}", paymentId);
-        TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentId);
-        log.info("Payment status from Tinkoff: Status={}, Success={}", state.status(), state.success());
-
-        if (!"CONFIRMED".equals(state.status()) && !"AUTHORIZED".equals(state.status())) {
-            log.warn("Payment {} status is not CONFIRMED or AUTHORIZED: {}. Cannot refund.", paymentId, state.status());
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Payment status is not CONFIRMED or AUTHORIZED: " + state.status()
-            );
-        }
-
-        // Выполняем возврат через Tinkoff API (полный возврат, amount = null)
-        log.info("Calling Tinkoff refund API for PaymentId={}", paymentId);
-        TinkoffApiClient.TinkoffRefundResponse refundResponse = tinkoffApiClient.refundPayment(paymentId, null);
-        log.info("Tinkoff refund response: Success={}, Status={}, Amount={}",
-                refundResponse.success(), refundResponse.status(), refundResponse.amount());
-
-        // Обновляем статус платежа на REFUNDED
-        attempt.setStatus("REFUNDED");
-        paymentAttemptRepo.save(attempt);
-        log.info("Updated payment attempt status to REFUNDED: AttemptId={}", attempt.getId());
-
-        // Отменяем подписку через SubscriptionService (в отдельной транзакции)
-        subscriptionService.cancelSubscription(attempt.getUser().getId(), attempt.getPlanCode());
-
-        log.info("Successfully processed refund: PaymentId={}, UserId={}, PlanCode={}",
-                paymentId, attempt.getUser().getId(), attempt.getPlanCode());
+        billingProcessingService.handleRefund(paymentId, userId);
     }
 
     /**
-     * Обрабатывает неуспешный платеж.
-     *
-     * @param paymentId идентификатор платежа
-     * @param orderId номер заказа
+     * Делегирует обработку неуспешного платежа в отдельный сервис с REQUIRES_NEW транзакцией.
      */
-    @Transactional
     public void handleFailedPayment(String paymentId, String orderId) {
-        PaymentAttempt attempt = paymentAttemptRepo.findByProviderSessionId(paymentId)
-                .orElseGet(() -> orderId != null ? paymentAttemptRepo.findByOrderId(orderId).orElse(null) : null);
-
-        if (attempt == null) {
-            log.warn("Payment attempt not found for PaymentId={}, OrderId={}", paymentId, orderId);
-            return;
-        }
-
-        // Не обновляем статус, если уже обработан
-        if (!"PENDING".equals(attempt.getStatus())) {
-            log.warn("Payment attempt {} already processed with status {}", attempt.getId(), attempt.getStatus());
-            return;
-        }
-
-        attempt.setStatus("FAILED");
-        paymentAttemptRepo.save(attempt);
-
-        log.info("Marked payment as failed: PaymentId={}, OrderId={}", paymentId, orderId);
+        billingProcessingService.handleFailedPayment(paymentId, orderId);
     }
 
     /**
@@ -538,76 +361,6 @@ public class BillingService {
     }
 
     /**
-     * Фоновая задача для обработки PENDING платежей.
-     * Запускается каждую минуту и проверяет статус платежей в Тинькофф.
-     * Защита от дублей: handleSuccessfulPayment() проверяет статус PENDING перед обработкой.
-     */
-    @Scheduled(fixedDelay = 60000) // каждую минуту (60000 мс) - уменьшено с 5 минут для быстрой обработки платежей
-    @Transactional
-    public void processPendingPayments() {
-        log.debug("Starting scheduled task to process pending payments");
-        
-        List<PaymentAttempt> pendingPayments = paymentAttemptRepo.findByStatus("PENDING");
-        
-        if (pendingPayments.isEmpty()) {
-            log.debug("No pending payments found");
-            return;
-        }
-        
-        log.info("Found {} pending payment(s) to process", pendingPayments.size());
-        
-        int processed = 0;
-        int failed = 0;
-        
-        for (PaymentAttempt attempt : pendingPayments) {
-            try {
-                // Проверяем, что есть providerSessionId и это не временный orderId
-                String paymentId = attempt.getProviderSessionId();
-                if (paymentId == null || paymentId.startsWith("ORDER_")) {
-                    log.debug("Skipping payment attempt {} - paymentId not yet available (providerSessionId={})", 
-                            attempt.getId(), paymentId);
-                    continue;
-                }
-                
-                log.debug("Checking payment status for PaymentAttempt {} (PaymentId={})", attempt.getId(), paymentId);
-                
-                // Проверяем статус в Тинькофф
-                TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentId);
-                log.debug("Payment status from Tinkoff: Status={}, Success={}", state.status(), state.success());
-                
-                // Если платеж успешен - обрабатываем
-                if ("CONFIRMED".equals(state.status()) || "AUTHORIZED".equals(state.status())) {
-                    log.info("Processing successful payment: PaymentAttemptId={}, PaymentId={}, OrderId={}", 
-                            attempt.getId(), paymentId, attempt.getOrderId());
-                    
-                    // handleSuccessfulPayment() защищен от дублей проверкой статуса PENDING
-                    handleSuccessfulPayment(paymentId, attempt.getOrderId());
-                    processed++;
-                } else if ("REJECTED".equals(state.status()) || "CANCELED".equals(state.status())) {
-                    // Помечаем как неуспешный
-                    log.info("Marking payment as failed: PaymentAttemptId={}, PaymentId={}, Status={}", 
-                            attempt.getId(), paymentId, state.status());
-                    handleFailedPayment(paymentId, attempt.getOrderId());
-                    failed++;
-                } else {
-                    // NEW, AUTHORIZING и т.д. - еще обрабатывается, оставляем PENDING
-                    log.debug("Payment still in progress: PaymentAttemptId={}, PaymentId={}, Status={}", 
-                            attempt.getId(), paymentId, state.status());
-                }
-                
-            } catch (Exception e) {
-                log.error("Error processing pending payment {} (PaymentId={}, OrderId={}): {}", 
-                        attempt.getId(), attempt.getProviderSessionId(), attempt.getOrderId(), 
-                        e.getMessage(), e);
-                // Продолжаем обработку следующих платежей
-            }
-        }
-        
-        log.info("Scheduled task completed: processed={}, failed={}, total={}", 
-                processed, failed, pendingPayments.size());
-    }
-
-    /**
      * Проверяет статус платежа по orderId.
      * Для PENDING платежей вызывает Tinkoff API для проверки актуального статуса.
      *
@@ -711,6 +464,78 @@ public class BillingService {
             Integer cameraQuota,
             Integer archiveDays
     ) {
+    }
+
+    /**
+     * Фоновая задача для обработки PENDING платежей.
+     * Запускается каждую минуту и проверяет статус платежей в Тинькофф.
+     * Защита от дублей: handleSuccessfulPayment() проверяет статус PENDING перед обработкой.
+     *
+     * ВАЖНО: метод НЕ транзакционный, каждая обработка платежа выполняется
+     * в отдельной REQUIRES_NEW транзакции внутри BillingProcessingService.
+     */
+    @Scheduled(fixedDelay = 60000) // каждую минуту (60000 мс) - уменьшено с 5 минут для быстрой обработки платежей
+    public void processPendingPayments() {
+        log.debug("Starting scheduled task to process pending payments");
+
+        List<PaymentAttempt> pendingPayments = paymentAttemptRepo.findByStatus("PENDING");
+
+        if (pendingPayments.isEmpty()) {
+            log.debug("No pending payments found");
+            return;
+        }
+
+        log.info("Found {} pending payment(s) to process", pendingPayments.size());
+
+        int processed = 0;
+        int failed = 0;
+
+        for (PaymentAttempt attempt : pendingPayments) {
+            try {
+                // Проверяем, что есть providerSessionId и это не временный orderId
+                String paymentId = attempt.getProviderSessionId();
+                if (paymentId == null || paymentId.startsWith("ORDER_")) {
+                    log.debug("Skipping payment attempt {} - paymentId not yet available (providerSessionId={})",
+                            attempt.getId(), paymentId);
+                    continue;
+                }
+
+                log.debug("Checking payment status for PaymentAttempt {} (PaymentId={})", attempt.getId(), paymentId);
+
+                // Проверяем статус в Тинькофф
+                TinkoffApiClient.TinkoffStateResponse state = tinkoffApiClient.getState(paymentId);
+                log.debug("Payment status from Tinkoff: Status={}, Success={}", state.status(), state.success());
+
+                // Если платеж успешен - обрабатываем
+                if ("CONFIRMED".equals(state.status()) || "AUTHORIZED".equals(state.status())) {
+                    log.info("Processing successful payment: PaymentAttemptId={}, PaymentId={}, OrderId={}",
+                            attempt.getId(), paymentId, attempt.getOrderId());
+
+                    // handleSuccessfulPayment() защищен от дублей проверкой статуса PENDING
+                    handleSuccessfulPayment(paymentId, attempt.getOrderId());
+                    processed++;
+                } else if ("REJECTED".equals(state.status()) || "CANCELED".equals(state.status())) {
+                    // Помечаем как неуспешный
+                    log.info("Marking payment as failed: PaymentAttemptId={}, PaymentId={}, Status={}",
+                            attempt.getId(), paymentId, state.status());
+                    handleFailedPayment(paymentId, attempt.getOrderId());
+                    failed++;
+                } else {
+                    // NEW, AUTHORIZING и т.д. - еще обрабатывается, оставляем PENDING
+                    log.debug("Payment still in progress: PaymentAttemptId={}, PaymentId={}, Status={}",
+                            attempt.getId(), paymentId, state.status());
+                }
+
+            } catch (Exception e) {
+                log.error("Error processing pending payment {} (PaymentId={}, OrderId={}): {}",
+                        attempt.getId(), attempt.getProviderSessionId(), attempt.getOrderId(),
+                        e.getMessage(), e);
+                // Продолжаем обработку следующих платежей
+            }
+        }
+
+        log.info("Scheduled task completed: processed={}, failed={}, total={}",
+                processed, failed, pendingPayments.size());
     }
 }
 
